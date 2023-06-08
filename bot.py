@@ -13,11 +13,14 @@ import os
 import platform
 import random
 import sys
+import openai
 
 import aiosqlite
 import discord
 from discord.ext import commands, tasks
 from discord.ext.commands import Bot, Context
+
+openai.api_key = "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"
 
 import exceptions
 
@@ -60,7 +63,7 @@ intents.message_content = True
 intents.presences = True
 """
 
-intents = discord.Intents.default()
+intents = discord.Intents.all()
 
 """
 Uncomment this if you want to use prefix (normal) commands.
@@ -171,7 +174,7 @@ async def status_task() -> None:
     """
     Setup the game status task of the bot.
     """
-    statuses = ["with you!", "with Krypton!", "with humans!"]
+    statuses = ["with your feelings!", "the accordian", "with humans!"]
     await bot.change_presence(activity=discord.Game(random.choice(statuses)))
 
 
@@ -182,9 +185,23 @@ async def on_message(message: discord.Message) -> None:
 
     :param message: The message that was sent.
     """
+   
+
     if message.author == bot.user or message.author.bot:
         return
     await bot.process_commands(message)
+
+    if "963732841097728072" in message.content:
+        response = openai.Completion.create(
+            model="text-davinci-003",
+            prompt=("Danbot is a chatbot based on a jaded Army Officer that reluctantly answers questions with sarcastic and vulgar responses. Answer the following comment as DanBot:\n\n" + message.content),
+            temperature=0.5,
+            max_tokens=60,
+            top_p=0.3,
+            frequency_penalty=0.5,
+            presence_penalty=0.0
+        )
+        await message.channel.send(response.choices[0].text)
 
 
 @bot.event
@@ -302,4 +319,5 @@ async def load_cogs() -> None:
 
 asyncio.run(init_db())
 asyncio.run(load_cogs())
+print (config["token"])
 bot.run(config["token"])

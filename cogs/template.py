@@ -26,7 +26,6 @@ class Template(commands.Cog, name="template"):
     # This will only allow non-blacklisted members to execute the command
     @checks.not_blacklisted()
     # This will only allow owners of the bot to execute the command -> config.json
-    @checks.is_owner()
     async def testcommand(self, context: Context):
         """
         This is a testing command that does nothing.
@@ -34,9 +33,7 @@ class Template(commands.Cog, name="template"):
         :param context: The application command context.
         """
         # Do your stuff here
-
-        # Don't forget to remove "pass", I added this just because there's no content in the method.
-        pass
+        await context.send("hello world")
 
 
 # And then we finally add the cog to the bot so that it can load, unload, reload and use it's content.
