@@ -1,6 +1,7 @@
 {
   "prefix": "$",
   "token": "OTYzNzMyODQxMDk3NzI4MDcy.Gio2Kc.21eOzeQf4dd1l8SB8uncVloA4OGaoYsLj3zkVA",
+  "openai_key": "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",
   "permissions": "8",
   "application_id": "963732841097728072",
   "sync_commands_globally": false,

@@ -20,7 +20,7 @@ import discord
 from discord.ext import commands, tasks
 from discord.ext.commands import Bot, Context
 
-openai.api_key = "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"
+
 
 import exceptions
 
@@ -151,6 +151,7 @@ The config is available using the following code:
 - self.bot.config # In cogs
 """
 bot.config = config
+openai.api_key = (config["openai_key"])
 
 
 @bot.event
@@ -187,7 +188,7 @@ async def on_message(message: discord.Message) -> None:
     """
    
 
-    if message.author == bot.user or message.author.bot:
+    if message.author == bot.user or message.author.bot:   
         return
     await bot.process_commands(message)
 
@@ -319,5 +320,4 @@ async def load_cogs() -> None:
 
 asyncio.run(init_db())
 asyncio.run(load_cogs())
-print (config["token"])
 bot.run(config["token"])
