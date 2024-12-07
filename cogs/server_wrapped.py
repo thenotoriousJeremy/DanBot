@@ -74,11 +74,12 @@ class ServerWrapped(commands.Cog):
                 self.reconstruct_message(msg_data, guild) for msg_data in cached_data["messages"]
             ]
             word_cloud_data = cached_data["word_cloud_data"]
+            word_counts = cached_data["word_counts"]  # Load word counts from cache
             message_counts = cached_data["message_counts"]
             reaction_counts = cached_data["reaction_counts"]
             active_hours = cached_data["active_hours"]
         else:
-            messages, word_cloud_data, message_counts, reaction_counts, active_hours = await self.fetch_historical_data(guild)
+            messages, word_cloud_data, message_counts, word_counts, reaction_counts, active_hours = await self.fetch_historical_data(guild)
             # Save essential data to cache
             self.cache[str(guild.id)] = {
                 "last_scraped": datetime.now().isoformat(),
@@ -88,9 +89,11 @@ class ServerWrapped(commands.Cog):
                 ],
                 "word_cloud_data": word_cloud_data,
                 "message_counts": message_counts,
+                "word_counts": word_counts,  # Include word counts in the cache
                 "reaction_counts": reaction_counts,
                 "active_hours": active_hours,
             }
+
             self.save_cache()
 
         # Generate Word Cloud
@@ -106,17 +109,28 @@ class ServerWrapped(commands.Cog):
         # Generate Most Reacted Messages Text
         most_reacted_messages = await self.generate_most_reacted_messages(guild, reaction_counts, messages)
 
+        # Add description
+        description = (
+            "**What is Server Wrapped?**\n"
+            "Server Wrapped is your personalized yearly recap of server activity! 🎉\n"
+            "It highlights your community's most active hours, top contributors, most reacted messages, "
+            "and even generates a fun word cloud from your conversations. Dive in and relive the year! 🎨✨\n\n"
+        )
+
+        # Generate Word Count Graph
+        word_count_graph_path = await self.generate_word_count_graph(guild, word_counts)
+
         # Send all the generated images
         paths = [
             wordcloud_path,
             heatmap_path,
             message_count_graph_path,
+            word_count_graph_path,  # Include the word count graph
         ]
         files = [discord.File(path, filename=os.path.basename(path)) for path in paths]
 
-        # Send the server wrapped images and most reacted messages as text
         await interaction.followup.send(
-            content=f"🎉 Here's your Server Wrapped!\n\n**Most Reacted Messages:**\n{most_reacted_messages}",
+            content=f"{description}🎉 Here's your Server Wrapped!\n\n**Most Reacted Messages:**\n{most_reacted_messages}",
             files=files,
         )
 
@@ -144,40 +158,41 @@ class ServerWrapped(commands.Cog):
         messages = []
         word_cloud_data = ""
         message_counts = defaultdict(int)
-        reaction_counts = {}  # Store message ID and channel ID
+        word_counts = defaultdict(int)  # New word count per user
+        reaction_counts = defaultdict(lambda: {"reaction_count": 0, "channel_id": None})
         active_hours = [0] * 24
 
         for channel in guild.text_channels:
             try:
+                print(f"Processing channel: {channel.name}")
                 async for message in channel.history(after=start_of_year, oldest_first=True, limit=None):
                     if message.author.bot:
-                        continue  # Ignore bot messages
+                        continue
 
                     messages.append(message)
                     word_cloud_data += f" {message.content}"
                     message_counts[message.author.id] += 1
 
-                    # Convert message creation time to EST
+                    # Count words for this user
+                    word_counts[message.author.id] += len(message.content.split())
+
+                    # Record activity by hour
                     est_time = message.created_at.astimezone(self.EST)
                     active_hours[est_time.hour] += 1
 
+                    # Count reactions and store channel_id
                     for reaction in message.reactions:
-                        reaction_counts[message.id] = {
-                            "channel_id": channel.id,
-                            "reaction_count": reaction_counts.get(message.id, {}).get("reaction_count", 0) + reaction.count,
-                        }
+                        reaction_counts[message.id]["reaction_count"] += reaction.count
+                        reaction_counts[message.id]["channel_id"] = channel.id
 
-                    # Prevent hitting rate limits
-                    await asyncio.sleep(1)
+                print(f"Channel '{channel.name}' processed successfully.")
+                await asyncio.sleep(0.1)  # Prevent hitting rate limits
             except discord.Forbidden:
                 print(f"Cannot access channel: {channel.name}")
             except discord.HTTPException as e:
                 print(f"Error fetching history for channel {channel.name}: {e}")
 
-        return messages, word_cloud_data, message_counts, reaction_counts, active_hours
-
-
-
+        return messages, word_cloud_data, message_counts, word_counts, reaction_counts, active_hours
 
     def filter_text(self, text):
         """
@@ -196,33 +211,44 @@ class ServerWrapped(commands.Cog):
         """
         Generate a list of the most reacted-to messages and return a string with links.
         """
-        # Fetch top N messages with the highest reaction counts
-        sorted_messages = sorted(
-            reaction_counts.items(),
-            key=lambda x: x[1]["reaction_count"],
-            reverse=True
-        )[:top_n]
+        # Validate top_n
+        if not isinstance(top_n, int) or top_n < 1:
+            top_n = 5  # Default to 5 if top_n is invalid
 
-        if not sorted_messages:
+        # Ensure reaction_counts is properly structured
+        try:
+            sorted_messages = sorted(
+                reaction_counts.items(),
+                key=lambda x: x[1]["reaction_count"],
+                reverse=True
+            )
+        except KeyError as e:
+            print(f"Error sorting reaction counts: {e}")
+            return "No reacted messages found in this server for the current year."
+
+        # Slice the top N messages
+        top_messages = sorted_messages[:top_n]
+
+        if not top_messages:
             return "No reacted messages found in this server for the current year."
 
         message_links = []
-        for msg_id, data in sorted_messages:
+        for msg_id, data in top_messages:
             channel_id = data["channel_id"]
             reaction_count = data["reaction_count"]
 
             try:
-                channel = guild.get_channel(channel_id)  # Get the channel object
-                message = await channel.fetch_message(msg_id)  # Fetch the message
+                # Fetch the channel and message
+                channel = guild.get_channel(channel_id)
+                message = await channel.fetch_message(msg_id)
                 link = f"https://discord.com/channels/{guild.id}/{channel.id}/{message.id}"
                 message_links.append(f"**[{message.author.display_name}](<{link}>)**: {reaction_count} reactions")
-            except Exception:
+            except Exception as e:
+                print(f"Error fetching message ID {msg_id}: {e}")
                 message_links.append(f"Message ID `{msg_id}`: {reaction_count} reactions (Message not accessible)")
 
         return "\n".join(message_links)
 
-
-    
     def generate_word_cloud(self, text):
         """
         Generate a word cloud for the server's messages.
@@ -288,10 +314,6 @@ class ServerWrapped(commands.Cog):
         plt.close()
 
         return heatmap_path
-
-
-
-
 
     async def generate_message_count_graph(self, guild, message_counts):
         """
@@ -385,8 +407,98 @@ class ServerWrapped(commands.Cog):
 
         return graph_path
 
+    async def generate_word_count_graph(self, guild, word_counts):
+        """
+        Generate a horizontal bar graph of word counts styled to match Discord's darker theme.
+        """
+        # Sort by word count descending to display most words at the top
+        sorted_users = sorted(word_counts.items(), key=lambda x: x[1], reverse=True)
+        num_users = len(sorted_users)
 
+        # Dynamically adjust the figure size: height depends on the number of users
+        fig_width = 10  # Fixed width in inches
+        fig_height = max(6, num_users * 0.5)  # Minimum height of 6 inches, scales with user count
 
+        # Create the figure with the calculated dimensions
+        fig, ax = plt.subplots(figsize=(fig_width, fig_height))
+        background_color = "#36393F"  # Discord darker background
+        fig.patch.set_facecolor("#2C2F33")  # Set figure background
+        ax.set_facecolor("#2C2F33")  # Set axes background
+
+        # Prepare data
+        y = list(range(num_users - 1, -1, -1))  # Create descending order for y-axis
+        x = [count for _, count in sorted_users]  # Word counts
+        names = []  # User display names
+        avatars = []  # User avatars
+        bar_colors = []  # Colors for bars
+
+        for user_id, _ in sorted_users:
+            member = guild.get_member(user_id) or await guild.fetch_member(user_id)
+            if member:
+                names.append(member.display_name)
+                avatar_url = member.avatar.url if member.avatar else member.default_avatar.url
+                try:
+                    # Fetch avatar and calculate average color
+                    async with self.bot.http._HTTPClient__session.get(avatar_url) as response:
+                        avatar_data = await response.read()
+                    avatar = Image.open(BytesIO(avatar_data)).resize((20, 20))  # Resize avatar for graph
+                    avatar_array = np.array(avatar)
+                    avg_color = tuple(avatar_array.mean(axis=(0, 1)).astype(int))
+                    bar_colors.append(f"#{avg_color[0]:02x}{avg_color[1]:02x}{avg_color[2]:02x}")
+                    avatars.append(avatar)
+                except Exception as e:
+                    print(f"Error fetching avatar for {member.display_name}: {e}")
+                    bar_colors.append("cyan")  # Fallback color
+                    avatars.append(None)
+            else:
+                names.append("Unknown")
+                bar_colors.append("cyan")  # Fallback color
+                avatars.append(None)
+
+        # Plot horizontal bars
+        bar_height = 0.5  # Reduced bar height for tighter spacing
+        ax.barh(y, x, color=bar_colors, height=bar_height)
+        ax.set_title("Word Counts by User", color="#FFFFFF", fontsize=18)  # Larger title font
+        ax.set_xlabel("Words", color="#FFFFFF", fontsize=14)  # Larger x-axis label font
+        ax.set_ylabel("Users", color="#FFFFFF", fontsize=14)  # Larger y-axis label font
+        ax.set_yticks(y)
+        ax.set_yticklabels(names, color="#FFFFFF", fontsize=12, ha="right", x=-0.01)  # Correct alignment
+        ax.tick_params(axis="x", colors="#FFFFFF", labelsize=12)  # Updated x-axis ticks to match Discord text color
+
+        # Add avatars and word counts at the end of each bar
+        for i, (name, count, avatar) in enumerate(zip(names, x, avatars)):
+            # Add word count slightly beyond the end of the bar
+            ax.text(count + max(x) * 0.03, y[i], str(count), va="center", color="#FFFFFF", fontsize=12)
+
+            if avatar:
+                # Convert avatar to a circular image
+                mask = Image.new("L", avatar.size, 0)
+                draw = ImageDraw.Draw(mask)
+                draw.ellipse((0, 0, avatar.size[0], avatar.size[1]), fill=255)
+                avatar = avatar.convert("RGBA")
+                avatar.putalpha(mask)
+
+                # Display the circular avatar centered at the end of the bar
+                avatar_imagebox = OffsetImage(avatar, zoom=1)
+                ab = AnnotationBbox(
+                    avatar_imagebox,
+                    (count, y[i]),  # Center the avatar at the end of the bar
+                    frameon=False,
+                    xycoords="data",
+                    box_alignment=(0.5, 0.5),
+                )
+                ax.add_artist(ab)
+
+        # Add buffer space to the graph
+        ax.set_xlim(0, max(x) + max(x) * 0.3)  # Add extra space for avatars and counts
+        ax.set_ylim(-0.5, num_users - 0.5)  # Adjust for clarity
+
+        # Save the graph
+        graph_path = "word_count_graph.png"
+        plt.savefig(graph_path, bbox_inches="tight", transparent=False, facecolor=fig.get_facecolor())
+        plt.close()
+
+        return graph_path
 
 
 async def setup(bot):
