@@ -1,0 +1,7 @@
+discord.py
+python-dotenv
+matplotlib 
+pandas 
+pillow
+wordcloud
+pytz
