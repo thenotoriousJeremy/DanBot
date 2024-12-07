@@ -84,7 +84,7 @@ class ServerWrapped(commands.Cog):
             self.cache[str(guild.id)] = {
                 "last_scraped": datetime.now().isoformat(),
                 "messages": [
-                    {"content": msg.content, "author_id": msg.author.id, "id": msg.id}
+                    {"content": msg["content"], "author_id": msg["author_id"], "id": msg["id"], "channel_id": msg["channel_id"]}
                     for msg in messages
                 ],
                 "word_cloud_data": word_cloud_data,
@@ -109,11 +109,14 @@ class ServerWrapped(commands.Cog):
         # Generate Most Reacted Messages Text
         most_reacted_messages = await self.generate_most_reacted_messages(guild, reaction_counts, messages)
 
+        # Generate Longest Messages Text
+        longest_messages = await self.generate_longest_messages(guild, messages)
+
         # Add description
         description = (
             "**What is Server Wrapped?**\n"
             "Server Wrapped is your personalized yearly recap of server activity! 🎉\n"
-            "It highlights your community's most active hours, top contributors, most reacted messages, "
+            "It highlights this community's most active hours, top contributors, most reacted messages, "
             "and even generates a fun word cloud from your conversations. Dive in and relive the year! 🎨✨\n\n"
         )
 
@@ -130,7 +133,7 @@ class ServerWrapped(commands.Cog):
         files = [discord.File(path, filename=os.path.basename(path)) for path in paths]
 
         await interaction.followup.send(
-            content=f"{description}🎉 Here's your Server Wrapped!\n\n**Most Reacted Messages:**\n{most_reacted_messages}",
+            content=f"{description}🎉 Here's your Server Wrapped!\n\n**Most Reacted Messages:**\n{most_reacted_messages}\n\n**Longest Messages:**\n{longest_messages}\n",
             files=files,
         )
 
@@ -143,12 +146,20 @@ class ServerWrapped(commands.Cog):
         Reconstruct a minimal message-like object from cached data.
         """
         class CachedMessage:
-            def __init__(self, content, author_id, msg_id):
+            def __init__(self, content, author, msg_id, channel_id):
                 self.content = content
-                self.author = guild.get_member(author_id) or discord.Object(id=author_id)
+                self.author = author  # This should be a Member or User object
                 self.id = msg_id
+                self.channel_id = channel_id
 
-        return CachedMessage(msg_data["content"], msg_data["author_id"], msg_data["id"])
+        author = guild.get_member(msg_data["author_id"]) or discord.Object(id=msg_data["author_id"])
+        return CachedMessage(
+            content=msg_data["content"],
+            author=author,
+            msg_id=msg_data["id"],
+            channel_id=msg_data["channel_id"]
+        )
+
 
     async def fetch_historical_data(self, guild):
         """
@@ -158,39 +169,48 @@ class ServerWrapped(commands.Cog):
         messages = []
         word_cloud_data = ""
         message_counts = defaultdict(int)
-        word_counts = defaultdict(int)  # New word count per user
-        reaction_counts = defaultdict(lambda: {"reaction_count": 0, "channel_id": None})
+        word_counts = defaultdict(int)  # Initialize word_counts
+        reaction_counts = {}  # Store message ID and channel ID
         active_hours = [0] * 24
+
+        print(f"Fetching historical data for guild: {guild.name} ({guild.id})")
 
         for channel in guild.text_channels:
             try:
-                print(f"Processing channel: {channel.name}")
+                print(f"Starting to fetch messages from channel: {channel.name} ({channel.id})")
+                
                 async for message in channel.history(after=start_of_year, oldest_first=True, limit=None):
                     if message.author.bot:
-                        continue
+                        continue  # Ignore bot messages
 
-                    messages.append(message)
+                    # Append minimal data to messages
+                    messages.append({
+                        "content": message.content,
+                        "author_id": message.author.id,
+                        "id": message.id,
+                        "channel_id": channel.id,  # Add channel ID
+                    })
                     word_cloud_data += f" {message.content}"
                     message_counts[message.author.id] += 1
+                    word_counts[message.author.id] += len(message.content.split())  # Count words per user
 
-                    # Count words for this user
-                    word_counts[message.author.id] += len(message.content.split())
-
-                    # Record activity by hour
+                    # Convert message creation time to EST
                     est_time = message.created_at.astimezone(self.EST)
                     active_hours[est_time.hour] += 1
 
-                    # Count reactions and store channel_id
                     for reaction in message.reactions:
-                        reaction_counts[message.id]["reaction_count"] += reaction.count
-                        reaction_counts[message.id]["channel_id"] = channel.id
+                        reaction_counts[message.id] = {
+                            "channel_id": channel.id,
+                            "reaction_count": reaction_counts.get(message.id, {}).get("reaction_count", 0) + reaction.count,
+                        }
 
-                print(f"Channel '{channel.name}' processed successfully.")
-                await asyncio.sleep(0.1)  # Prevent hitting rate limits
+                print(f"Completed fetching messages from channel: {channel.name} ({channel.id})")
             except discord.Forbidden:
-                print(f"Cannot access channel: {channel.name}")
+                print(f"Cannot access channel: {channel.name} ({channel.id})")
             except discord.HTTPException as e:
-                print(f"Error fetching history for channel {channel.name}: {e}")
+                print(f"Error fetching history for channel {channel.name} ({channel.id}): {e}")
+
+        print(f"Finished fetching historical data for guild: {guild.name} ({guild.id})")
 
         return messages, word_cloud_data, message_counts, word_counts, reaction_counts, active_hours
 
@@ -248,14 +268,58 @@ class ServerWrapped(commands.Cog):
                 message_links.append(f"Message ID `{msg_id}`: {reaction_count} reactions (Message not accessible)")
 
         return "\n".join(message_links)
+    
+    async def generate_longest_messages(self, guild, messages, top_n=5):
+        """
+        Generate a list of the longest messages and return a string with links.
+        """
+        # Validate top_n
+        if not isinstance(top_n, int) or top_n < 1:
+            top_n = 5  # Default to 5 if top_n is invalid
+
+        # Sort messages by length of content
+        sorted_messages = sorted(messages, key=lambda x: len(x.content), reverse=True)  # Use attribute access
+
+        # Slice the top N longest messages
+        top_messages = sorted_messages[:top_n]
+
+        if not top_messages:
+            return "No long messages found in this server for the current year."
+
+        message_links = []
+        for msg in top_messages:
+            channel_id = msg.channel_id
+            message_id = msg.id
+            content_length = len(msg.content)
+            author_id = msg.author.id
+
+            try:
+                # Fetch the channel and message
+                channel = guild.get_channel(channel_id)
+                if not channel:
+                    raise discord.Forbidden
+
+                message = await channel.fetch_message(message_id)
+                link = f"https://discord.com/channels/{guild.id}/{channel.id}/{message.id}"
+                author_name = message.author.display_name
+                message_links.append(f"**[{author_name}](<{link}>)**: {content_length} characters")
+            except discord.Forbidden:
+                author = guild.get_member(author_id) or discord.Object(id=author_id)
+                author_name = author.display_name if isinstance(author, discord.Member) else "Unknown"
+                message_links.append(f"Message by **{author_name}**: {content_length} characters (Message not accessible)")
+            except Exception as e:
+                print(f"Error processing message ID {message_id}: {e}")
+                message_links.append(f"Message ID `{message_id}`: {content_length} characters (Error: {e})")
+
+        return "\n".join(message_links)
 
     def generate_word_cloud(self, text):
         """
         Generate a word cloud for the server's messages.
         """
         wordcloud = WordCloud(
-            width=1200,
-            height=1600,
+            width=1024,
+            height=1024,
             background_color="black",
             colormap="Set3"
         ).generate(text)
@@ -499,7 +563,6 @@ class ServerWrapped(commands.Cog):
         plt.close()
 
         return graph_path
-
 
 async def setup(bot):
     await bot.add_cog(ServerWrapped(bot))
