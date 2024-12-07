@@ -21,7 +21,7 @@ Installation
 1.  **Clone the Repository**\
     Clone this repository to your local machine:
 
-    `git clone https://github.com/yourusername/server-wrapped-bot.git
+    `git clone https://github.com/thenotoriousJeremy/DanBot.git
     cd server-wrapped-bot`
 
 2.  **Install Dependencies**\
