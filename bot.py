@@ -25,7 +25,9 @@ async def on_ready():
     # Load the Discord Wrapped extension
     await bot.load_extension("cogs.server_wrapped")
     print("Server Wrapped cog loaded!")
-
+    # Load the Discord Wrapped extension
+    await bot.load_extension("cogs.fishspeech")
+    print("Fish Speech cog loaded!")
 
     # Sync slash commands globally
     try:
