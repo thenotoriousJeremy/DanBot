@@ -1,3 +1,4 @@
+import asyncio
 import discord
 from discord.ext import commands, tasks
 from discord import app_commands
@@ -8,6 +9,7 @@ import sqlite3
 class BirthdayCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
+        self.birthday_check_time = "09:00"  # Set the time for the daily check (24-hour format: HH:MM)
         self.conn = sqlite3.connect('birthdays.db')
         self.create_table()
         self.birthday_reminder.start()
@@ -104,7 +106,7 @@ class BirthdayCog(commands.Cog):
     async def birthday_reminder(self):
         today = datetime.now().strftime('%m-%d')
         next_week = (datetime.now() + timedelta(days=7)).strftime('%m-%d')
-        channel = discord.utils.get(self.bot.get_all_channels(), name='dpca-irl')  # Replace 'general' with your channel name
+        channel = discord.utils.get(self.bot.get_all_channels(), name='dpca-irl')  # Replace 'dpca-irl' with your channel name
 
         if not channel:
             return
@@ -125,6 +127,18 @@ class BirthdayCog(commands.Cog):
     async def before_birthday_reminder(self):
         await self.bot.wait_until_ready()
 
+        # Calculate the delay until the specified time
+        now = datetime.now()
+        target_time = datetime.strptime(self.birthday_check_time, "%H:%M").replace(
+            year=now.year, month=now.month, day=now.day
+        )
+        if now > target_time:
+            # If the target time today has already passed, set it for tomorrow
+            target_time += timedelta(days=1)
+
+        delay = (target_time - now).total_seconds()
+        print(f"Waiting {delay} seconds to start the birthday reminder.")
+        await asyncio.sleep(delay)
 
 async def setup(bot):
     await bot.add_cog(BirthdayCog(bot))
