@@ -6,7 +6,7 @@ cursor = conn.cursor()
 
 # Replace with the username or user ID of the entry to remove
 user_id = 0  # Set this to the actual user ID if known
-username = "burritodp"  # Replace with the username
+username = "Tucker"  # Replace with the username
 
 # Delete the entry
 try:
