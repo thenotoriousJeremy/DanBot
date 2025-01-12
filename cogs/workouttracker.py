@@ -146,7 +146,7 @@ class WorkoutTracker(commands.Cog):
                     workout for workout in self.user_workouts[message.author.id] if workout >= start_of_week
                 ]
                 total_workouts_this_week = len(weekly_workouts)
-                self.user_goals[message.author.id] = (self.user_goals[message.author.id][0], total_workouts)
+                self.user_goals[message.author.id] = (self.user_goals[message.author.id][0], total_workouts_this_week)
                 self.save_data()
                 # Log publicly in the thread
                 await message.channel.send(f"Workout logged for {message.author.mention}! Total workouts this week: {total_workouts_this_week}.")
