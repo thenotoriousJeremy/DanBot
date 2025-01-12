@@ -6,6 +6,7 @@ import asyncio
 from collections import defaultdict
 import json
 import os
+from datetime import timedelta
 
 class WorkoutTracker(commands.Cog):
     STORAGE_FILE = "workout_data.json"
@@ -17,9 +18,10 @@ class WorkoutTracker(commands.Cog):
         self.user_workouts = defaultdict(list)
         self.warning_threshold = 6 * 60 * 60  # 6 hours before reset
         self.leaderboard_channel = 1115982069550559322  # Channel where leaderboard is posted
-        self.weekly_reset_time = datetime.now().replace(hour=23, minute=59, second=59) + timedelta(days=(5 - datetime.now().weekday()) % 7)
+        self.weekly_reset_time = datetime.now().replace(hour=22, minute=59, second=59) + timedelta(days=(6 - datetime.now().weekday()))
         self.load_data()
         self.reset_task.start()
+        print(f"Weekly reset scheduled for: {self.weekly_reset_time}")
 
     def save_data(self):
         """Save user goals and workouts to a file."""
@@ -43,7 +45,10 @@ class WorkoutTracker(commands.Cog):
             print("No storage file found. Initializing empty data.")
             self.user_goals = {}
             self.user_workouts = defaultdict(list)
-
+        for user_id in self.user_goals:
+            if user_id not in self.user_workouts:
+                print(f"Initializing missing workouts for user {user_id}.")
+                self.user_workouts[user_id] = []
 
 
     def cog_unload(self):
@@ -64,6 +69,9 @@ class WorkoutTracker(commands.Cog):
         channel = interaction.channel
         if channel:
             await channel.send(f"📢 {interaction.user.mention} has joined the workout tracker with a goal of {goal_per_week} workouts per week!")
+        
+        self.user_workouts[interaction.user.id] = self.user_workouts.get(interaction.user.id, [])
+
 
     @app_commands.command(name="opt_out", description="Opt out of the workout tracker.")
     async def opt_out(self, interaction: discord.Interaction):
@@ -92,7 +100,7 @@ class WorkoutTracker(commands.Cog):
         leaderboard_message = "**🏋️ Workout Leaderboard 🏋️**\n\n"
         for i, (user_id, (_, total_workouts)) in enumerate(leaderboard, start=1):
             user = await self.bot.fetch_user(user_id)
-            leaderboard_message += f"**{i}. {user.display_name}: {total_workouts} workouts**\n"
+            leaderboard_message += f"{i}. {user.display_name}: {total_workouts} workouts\n"
 
         await interaction.response.send_message(leaderboard_message, ephemeral=False)
 
@@ -132,12 +140,16 @@ class WorkoutTracker(commands.Cog):
             reply = await self.bot.wait_for('message', timeout=60.0, check=check)
             if reply.content.lower() == 'yes':
                 self.user_workouts[message.author.id].append(datetime.now())
-                total_workouts = len(self.user_workouts[message.author.id])
+                # Get the start of the current week (Monday at 00:00)
+                start_of_week = datetime.now() - timedelta(days=datetime.now().weekday())
+                weekly_workouts = [
+                    workout for workout in self.user_workouts[message.author.id] if workout >= start_of_week
+                ]
+                total_workouts_this_week = len(weekly_workouts)
                 self.user_goals[message.author.id] = (self.user_goals[message.author.id][0], total_workouts)
                 self.save_data()
-
                 # Log publicly in the thread
-                await message.channel.send(f"Workout logged for {message.author.mention}! Total workouts: {total_workouts}.")
+                await message.channel.send(f"Workout logged for {message.author.mention}! Total workouts this week: {total_workouts_this_week}.")
             # Delete the confirmation exchange regardless of the response
             await confirmation_message.delete()
             await reply.delete()
@@ -153,29 +165,51 @@ class WorkoutTracker(commands.Cog):
             self.weekly_reset_time += timedelta(weeks=1)
 
         for user_id, (goal_per_week, total_workouts) in self.user_goals.items():
+            # Ensure the user's workout list is initialized
+            if user_id not in self.user_workouts:
+                print(f"User {user_id} missing in user_workouts. Initializing.")
+                self.user_workouts[user_id] = []
+
             if now >= self.weekly_reset_time - timedelta(seconds=self.warning_threshold):
                 if len(self.user_workouts[user_id]) < goal_per_week:
-                    user = await self.bot.fetch_user(user_id)
-                    await user.send(
-                        f"⚠️ Reminder: You haven't met your weekly workout goal of {goal_per_week} workouts. Log your workouts before the week resets!"
-                    )
+                    try:
+                        user = await self.bot.fetch_user(user_id)
+                        await user.send(
+                            f"⚠️ Reminder: You haven't met your weekly workout goal of {goal_per_week} workouts. Log your workouts before the week resets!"
+                        )
+                    except discord.Forbidden:
+                        print(f"Unable to send reminder to user {user_id}. DMs might be disabled.")
+
 
     async def reset_weekly_goals(self):
         channel = self.bot.get_channel(self.leaderboard_channel)
-        if channel:
-            await channel.send("Weekly leaderboard reset! Keep up the hard work!")
+        if not channel:
+            print(f"Leaderboard channel {self.leaderboard_channel} not found!")
+            return
 
-        for user_id, (goal_per_week, total_workouts) in self.user_goals.items():
-            user = await self.bot.fetch_user(user_id)
-            workouts_logged = len(self.user_workouts[user_id])
+        start_of_week = datetime.now() - timedelta(days=datetime.now().weekday())
+        leaderboard_message = "📅 **Weekly Leaderboard Reset** 📅\n\n"
 
-            if workouts_logged >= goal_per_week:
-                await channel.send(f"🎉 Congratulations to {user.mention} for meeting their weekly goal of {goal_per_week} workouts! 🎉")
+        for user_id, (goal_per_week, _) in self.user_goals.items():
+            # Ensure the user's workout list is initialized
+            if user_id not in self.user_workouts:
+                self.user_workouts[user_id] = []
+
+            # Filter weekly workouts (non-destructive)
+            weekly_workouts = [workout for workout in self.user_workouts[user_id] if workout >= start_of_week]
+            weekly_count = len(weekly_workouts)
+
+            if weekly_count >= goal_per_week:
+                leaderboard_message += f"🎉 **<@{user_id}>** met their weekly goal of **{goal_per_week} workouts** with **{weekly_count} logged**! 🎉\n"
             else:
-                await channel.send(f"👎 {user.mention} failed to meet their weekly goal of {goal_per_week} workouts. 👎")
+                leaderboard_message += f"👎 **<@{user_id}>** did not meet their goal of **{goal_per_week} workouts** with only **{weekly_count} logged**. 👎\n"
 
-            self.user_workouts[user_id] = []
+        # Save updated data
         self.save_data()
+
+        # Send the consolidated leaderboard message
+        await channel.send(leaderboard_message)
+
 
     @reset_task.before_loop
     async def before_reset_task(self):
