@@ -136,9 +136,10 @@ class WorkoutTracker(commands.Cog):
         weekly_workouts = [workout for workout in user_workouts if workout >= start_of_week]
         print(f"Weekly workouts: {weekly_workouts}")
 
+        total_workouts = len(user_workouts)
         total_this_week = len(weekly_workouts)
         await interaction.response.send_message(
-            f"You've logged **{total_this_week} workouts** this week! Keep it up! 🏋️",
+            f"You've logged **{total_this_week} workouts** this week and **{total_workouts} workouts** total! Keep it up! 🏋️",
             ephemeral=True
         )
 
