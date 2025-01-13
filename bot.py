@@ -9,6 +9,7 @@ TOKEN = os.getenv("DISCORD_TOKEN")
 
 # Intents and bot setup
 intents = discord.Intents.default()
+intents.members = True
 intents.messages = True
 intents.message_content = True
 
@@ -17,6 +18,11 @@ bot = commands.Bot(command_prefix="!", intents=intents)  # "!" is a placeholder
 
 @bot.event
 async def on_ready():
+    for guild in bot.guilds:
+        print(f"Fetching members for guild: {guild.name}")
+        async for member in guild.fetch_members(limit=None):
+            # This will fetch and cache all members
+            pass
     print(f"Logged in as {bot.user}")
 
     # Load the BirthdayCog extension

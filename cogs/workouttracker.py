@@ -38,7 +38,7 @@ class WorkoutTracker(commands.Cog):
             with open(self.STORAGE_FILE, "r") as f:
                 data = json.load(f)
                 self.user_goals = {int(key): value for key, value in data.get("user_goals", {}).items()}
-                self.user_workouts = {int(key): [datetime.fromisoformat(dt) for dt in value] for key, value in data.get("user_workouts", {}).items()}
+                self.user_workouts = {int(key): [datetime.fromisoformat(dt).replace(tzinfo=None) for dt in value] for key, value in data.get("user_workouts", {}).items()}
             print(f"Loaded user goals: {self.user_goals}")
             print(f"Loaded user workouts: {self.user_workouts}")
         else:
@@ -90,19 +90,57 @@ class WorkoutTracker(commands.Cog):
         else:
             await interaction.response.send_message("You're not currently participating in the tracker.", ephemeral=True)
 
-    @app_commands.command(name="leaderboard", description="View the current workout leaderboard.")
+    @app_commands.command(name="leaderboard", description="View the workout leaderboard.")
     async def leaderboard(self, interaction: discord.Interaction):
         if not self.user_goals:
             await interaction.response.send_message("No one has logged any workouts yet! Be the first to start!", ephemeral=True)
             return
 
-        leaderboard = sorted(self.user_goals.items(), key=lambda x: x[1][1], reverse=True)
-        leaderboard_message = "**🏋️ Workout Leaderboard 🏋️**\n\n"
-        for i, (user_id, (_, total_workouts)) in enumerate(leaderboard, start=1):
-            user = await self.bot.fetch_user(user_id)
-            leaderboard_message += f"{i}. {user.display_name}: {total_workouts} workouts\n"
+        # Calculate total workouts for all time
+        total_workouts = {
+            user_id: len(self.user_workouts.get(user_id, [])) for user_id in self.user_goals
+        }
 
+        # Sort users by total workouts
+        leaderboard = sorted(total_workouts.items(), key=lambda x: x[1], reverse=True)
+
+        # Build the leaderboard message
+        leaderboard_message = "**🏋️ Workout Leaderboard (All-Time) 🏋️**\n\n"
+        for i, (user_id, workout_count) in enumerate(leaderboard, start=1):
+            member = interaction.guild.get_member(user_id)
+            if not member:
+                # Fetch the member if not cached
+                try:
+                    member = await interaction.guild.fetch_member(user_id)
+                except discord.NotFound:
+                    member = None
+
+            if member:
+                display_name = member.display_name  # Use the display name (nickname or username fallback)
+            else:
+                display_name = f"Unknown User ({user_id})"  # Handle cases where the user can't be fetched
+            leaderboard_message += f"{i}. {display_name}: {workout_count} workouts\n"
+
+        # Send the leaderboard
         await interaction.response.send_message(leaderboard_message, ephemeral=False)
+
+    @app_commands.command(name="my_workouts", description="Check how many workouts you've logged this week.")
+    async def my_workouts(self, interaction: discord.Interaction):
+        user_id = interaction.user.id
+        start_of_week = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=datetime.now().weekday())
+        print(f"Start of week: {start_of_week}")
+
+        user_workouts = self.user_workouts.get(user_id, [])
+        print(f"User workouts (raw): {user_workouts}")
+
+        weekly_workouts = [workout for workout in user_workouts if workout >= start_of_week]
+        print(f"Weekly workouts: {weekly_workouts}")
+
+        total_this_week = len(weekly_workouts)
+        await interaction.response.send_message(
+            f"You've logged **{total_this_week} workouts** this week! Keep it up! 🏋️",
+            ephemeral=True
+        )
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
@@ -111,7 +149,7 @@ class WorkoutTracker(commands.Cog):
 
         # Ensure the message is from the specific thread
         if not isinstance(message.channel, discord.Thread) or message.channel.id != self.SPECIFIC_THREAD_ID:
-            print(f"1")
+            print(f"Wrong thread: {message.channel.id}")
             return
 
         # Check if the user is opted into the tracker
@@ -139,23 +177,46 @@ class WorkoutTracker(commands.Cog):
         try:
             reply = await self.bot.wait_for('message', timeout=60.0, check=check)
             if reply.content.lower() == 'yes':
-                self.user_workouts[message.author.id].append(datetime.now())
-                # Get the start of the current week (Monday at 00:00)
-                start_of_week = datetime.now() - timedelta(days=datetime.now().weekday())
+                # Ensure the workout list is initialized
+                if message.author.id not in self.user_workouts:
+                    self.user_workouts[message.author.id] = []
+
+                # Log workout with time
+                current_time = datetime.now()
+                self.user_workouts[message.author.id].append(current_time)
+
+                # Calculate start of the week in UTC
+                start_of_week = current_time.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=current_time.weekday())
                 weekly_workouts = [
                     workout for workout in self.user_workouts[message.author.id] if workout >= start_of_week
                 ]
                 total_workouts_this_week = len(weekly_workouts)
-                self.user_goals[message.author.id] = (self.user_goals[message.author.id][0], total_workouts_this_week)
+
+                # Update user goals without overwriting unrelated data
+                self.user_goals[message.author.id] = (
+                    self.user_goals[message.author.id][0],  # Keep the weekly goal
+                    total_workouts_this_week               # Update only the workouts count
+                )
+
+                # Save the data and log publicly
                 self.save_data()
-                # Log publicly in the thread
-                await message.channel.send(f"Workout logged for {message.author.mention}! Total workouts this week: {total_workouts_this_week}.")
+                await message.channel.send(
+                    f"Workout logged for {message.author.mention}! Total workouts this week: {total_workouts_this_week}."
+                )
+
+                # Debugging
+                print(f"Workout logged: {current_time}")
+                print(f"Start of week: {start_of_week}")
+                print(f"Weekly workouts: {weekly_workouts}")
+
             # Delete the confirmation exchange regardless of the response
             await confirmation_message.delete()
             await reply.delete()
+
         except asyncio.TimeoutError:
             # Delete the confirmation message if there's no response
             await confirmation_message.delete()
+
 
     async def schedule_weekly_reset(self):
         while True:
