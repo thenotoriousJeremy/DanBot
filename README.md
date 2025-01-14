@@ -1,103 +1,137 @@
-Server Wrapped Bot
-==================
+# DanBot
 
-Server Wrapped is a Discord bot designed to provide a yearly recap of server activity. It analyzes your server's messages to create detailed reports with activity heatmaps, word clouds, and insights like most reacted messages, longest messages, and more. It's a fun and interactive way to reflect on the past year with your community!
+DanBot is a modular Discord bot designed to provide a variety of features, including a yearly recap of server activity, managing birthdays, workout tracking, and a text-to-speech system. It supports custom commands and features to enhance community interaction.
 
-Features
---------
+## Features
 
--   **Word Cloud Generation**: Creates a word cloud from messages sent in the server.
--   **Activity Heatmap**: Visualizes server activity by hour.
--   **Message Count Analysis**: Graphs message counts by user.
--   **Word Count Analysis**: Graphs word counts by user.
--   **Most Reacted Messages**: Highlights the top messages based on reactions.
--   **Longest Messages**: Highlights the longest messages sent in the server.
--   **Customizable Reporting**: Allows you to adjust the number of top messages for various features.
--   **Caching**: Uses caching to minimize API calls and optimize performance.
+### **Server Wrapped**
+- **Word Cloud Generation**: Creates a word cloud from messages sent in the server.
+- **Activity Heatmap**: Visualizes server activity by hour.
+- **Message Count Analysis**: Graphs message counts by user.
+- **Word Count Analysis**: Graphs word counts by user.
+- **Most Reacted Messages**: Highlights the top messages based on reactions.
+- **Longest Messages**: Highlights the longest messages sent in the server.
+- **Customizable Reporting**: Allows you to adjust the number of top messages for various features.
+- **Caching**: Uses caching to minimize API calls and optimize performance.
 
-Installation
-------------
+### **Birthday Tracker**
+- **Set Birthday**: Allows users to set their birthdays.
+- **Birthday Reminders**: Notifies the server when a user's birthday is approaching or on the day.
+- **List Birthdays**: Provides a list of all known birthdays in the server.
 
-1.  **Clone the Repository**\
-    Clone this repository to your local machine:
+### **Workout Tracker**
+- **Weekly Workout Goals**: Users can set weekly workout goals.
+- **Workout Logging**: Tracks and logs user workouts via confirmation in a specific thread.
+- **Leaderboard**: Displays the leaderboard of users based on workouts logged.
+- **Weekly Reset**: Automatically resets the weekly goals and sends reminders.
 
-    `git clone https://github.com/thenotoriousJeremy/DanBot.git
-    cd server-wrapped-bot`
+### **Fish Speech**
+- **Text-to-Speech (TTS)**: Generate TTS audio from input text using the Fish Speech API.
+- **Voice Channel Integration**: Plays the generated audio in a Discord voice channel.
+- **Dynamic Commands**: Commands like `/say` to generate and play TTS and `/leave` to disconnect from the voice channel.
 
-2.  **Install Dependencies**\
-    Use `pip` to install the required libraries:
+## Installation
 
-    `pip install -r requirements.txt`
+1. **Clone the Repository**  
+   Clone this repository to your local machine:
 
-3.  **Set Up the Bot**
+   ```bash
+   git clone https://github.com/thenotoriousJeremy/DanBot.git
+   cd server-wrapped-bot
+   ```
 
-    -   Create a bot on the Discord Developer Portal.
-    -   Copy the bot token.
-    -   Create a `.env` file in the project directory and add your bot token:
+2. **Install Dependencies**  
+   Use `pip` to install the required libraries:
 
-        `DISCORD_TOKEN=your_bot_token`
+   ```bash
+   pip install -r requirements.txt
+   ```
 
-4.  **Run the Bot**\
-    Start the bot:
+3. **Set Up the Bot**
 
-    `python bot.py`
+   - Create a bot on the Discord Developer Portal.
+   - Copy the bot token.
+   - Create a `.env` file in the project directory and add your bot token:
 
-Commands
---------
+     ```env
+     DISCORD_TOKEN=your_bot_token
+     FISH_TOKEN=your_fish_token (optional)
+     MODEL_ID=your_model_id (optional)
+     ```
 
-### `/server_wrapped`
+4. **Run the Bot**  
+   Start the bot:
 
-Generate a detailed server activity report for the current year. The report includes:
+   ```bash
+   python bot.py
+   ```
 
--   **Word Cloud**: A visualization of the most common words used in the server.
--   **Activity Heatmap**: A chart showing the server's most active hours.
--   **Message Count Graph**: A graph showing the number of messages sent by each user.
--   **Word Count Graph**: A graph showing the number of words sent by each user.
--   **Most Reacted Messages**: A list of messages with the highest number of reactions.
--   **Longest Messages**: A list of the longest messages sent in the server.
+## Commands
 
-#### Usage
+### **Server Wrapped**
+- `/server_wrapped`: Generate a detailed server activity report for the current year.
 
-Type `/server_wrapped` in any server channel where the bot has permissions. The bot will analyze the server's activity and generate the report.
+### **Birthday Tracker**
+- `/set_birthday`: Set your birthday or another user’s birthday in MM-DD format.
+- `/when_is`: Ask when a user's birthday is.
+- `/list_birthdays`: List all saved birthdays in the server.
 
-#### Permissions
+### **Workout Tracker**
+- `/set_goal`: Set a weekly workout goal.
+- `/opt_out`: Opt out of the workout tracker.
+- `/leaderboard`: View the all-time workout leaderboard.
+- `/my_workouts`: Check how many workouts you've logged this week.
 
-Ensure the bot has the following permissions:
+### **Fish Speech**
+- `/say`: Generate TTS from text and play it in the voice channel.
+- `/leave`: Make the bot leave the voice channel.
 
--   **Read Message History**
--   **Send Messages**
--   **Attach Files**
--   **Embed Links**
+## Configuration
 
-Configuration
--------------
+- **Cache Expiry**: Modify `CACHE_EXPIRY` in `ServerWrapped` for server data caching duration.
+- **Workout Tracker Thread**: Replace `SPECIFIC_THREAD_ID` in `WorkoutTracker` with your specific thread ID.
+- **TTS Configuration**: Ensure `FISH_TOKEN` and `MODEL_ID` are correctly set in the `.env` file if using TTS.
 
-### Adjusting Cache Expiry
+## How to Use
 
-By default, cached data expires after 24 hours. To change this, modify the `CACHE_EXPIRY` value in the `ServerWrapped` class:
+### **For End Users**
+1. **Invite DanBot to Your Server**
+   - Obtain the bot's invite link from the server admin or bot owner.
+   - Ensure you have the "Manage Server" permission to invite the bot.
 
-`CACHE_EXPIRY = timedelta(hours=24)  # Change to desired duration`
+2. **Set Up Permissions**
+   - Grant DanBot the following permissions:
+     - **Read Message History**
+     - **Send Messages**
+     - **Attach Files**
+     - **Embed Links**
+     - **Connect and Speak** (for TTS features).
 
-### Customizing the Number of Top Messages
+3. **Use Commands**
+   - Type `/` in any server channel to view all available commands.
+   - Example usage:
+     - `/server_wrapped`: View the server's yearly activity report.
+     - `/set_birthday 12-25`: Set your birthday to December 25th.
+     - `/say Hello everyone!`: Generate TTS audio and play it in a voice channel.
 
-You can adjust the number of messages displayed in the "Most Reacted Messages" and "Longest Messages" sections by editing the `top_n` parameter in the respective functions:
+4. **Track Workouts**
+   - Use `/set_goal` to set your weekly workout goal.
+   - Log workouts by posting a workout image in the specified thread and confirming the post.
 
-`most_reacted_messages = await self.generate_most_reacted_messages(guild, reaction_counts, top_n=10)
-longest_messages = await self.generate_longest_messages(guild, messages, top_n=10)`
+5. **Birthday Notifications**
+   - Set your birthday with `/set_birthday` to receive special mentions on your day!
 
-Known Issues and Troubleshooting
---------------------------------
+6. **Enjoy Interactive Features**
+   - Generate TTS audio and fun visuals with commands like `/say` and `/server_wrapped`.
 
--   **Rate Limiting**: If the bot processes a large server, it may hit Discord's rate limits. The bot includes automatic delay mechanisms to minimize this.
--   **Permission Errors**: Ensure the bot has access to all channels you want it to analyze.
--   **Cached Data Issues**: If cached data causes issues, delete the `server_wrapped_cache.json` file in the bot's directory to reset the cache.
+### **For Server Admins**
+- Ensure DanBot has access to the necessary channels.
+- Designate a specific thread or channel for logging workouts (used by the Workout Tracker cog).
 
-Contributing
-------------
+## Contributing
 
 Contributions are welcome! If you have suggestions for new features or find a bug, feel free to open an issue or submit a pull request.
 
-License
--------
+## License
 
 This project is licensed under the MIT License. See the `LICENSE` file for details.
