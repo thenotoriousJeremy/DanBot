@@ -7,6 +7,42 @@ from collections import defaultdict
 import json
 import os
 from datetime import timedelta
+from openai import OpenAI
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
+OPENAI_TOKEN = os.getenv("OPENAI_TOKEN")
+
+if OPENAI_TOKEN:
+    client = OpenAI(api_key=OPENAI_TOKEN)
+
+def generate_demeaning_message():
+    if not OPENAI_TOKEN:
+        return (
+            "Honestly, you set this goal for yourself, and you couldn't even stick to it for a single week. "
+            "That's just sad. Do better next time. 😒"
+        )
+
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",  # Use the updated model for generating messages
+            messages=[
+                {"role": "system", "content": "You are a brutally honest and mean assistant."},
+                {"role": "user", "content": "Generate a mean/demeaning message for people who failed to meet their own workout goals for the week. Keep it unique, somber, insulting and brutally honest. No Exclamation marks"}
+            ],
+        )
+        message = response.choices[0].message.content
+        print(f"Generated demeaning message: {message}")  # Print the message to the terminal
+        return message
+    except Exception as e:
+        print(f"Error generating message: {e}")
+        return (
+            "Honestly, you set this goal for yourself, and you couldn't even stick to it for a single week. "
+            "That's just sad. Do better next time. 😒"
+        )
+
+generate_demeaning_message()
 
 class WorkoutTracker(commands.Cog):
     STORAGE_FILE = "workout_data.json"
@@ -235,7 +271,7 @@ class WorkoutTracker(commands.Cog):
             self.weekly_reset_time += timedelta(weeks=1)  # Schedule for next week
 
     async def send_reminders(self):
-        start_of_week = datetime.now() - timedelta(days=datetime.now().weekday())
+        start_of_week = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=datetime.now().weekday())
 
         for user_id, (goal_per_week, _) in self.user_goals.items():
             if user_id not in self.user_workouts:
@@ -259,8 +295,11 @@ class WorkoutTracker(commands.Cog):
             print(f"Leaderboard channel {self.leaderboard_channel} not found!")
             return
 
-        start_of_week = datetime.now() - timedelta(days=datetime.now().weekday())
-        leaderboard_message = "📅 **Weekly Leaderboard Reset** 📅\n\n"
+        start_of_week = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=datetime.now().weekday())
+
+        # Separate users into groups based on whether they met their goal
+        met_goal = []
+        did_not_meet_goal = []
 
         for user_id, (goal_per_week, _) in self.user_goals.items():
             # Ensure the user's workout list is initialized
@@ -272,11 +311,31 @@ class WorkoutTracker(commands.Cog):
             weekly_count = len(weekly_workouts)
 
             if weekly_count >= goal_per_week:
-                leaderboard_message += f"🎉 **<@{user_id}>** met their weekly goal of **{goal_per_week} workouts** with **{weekly_count} logged**! 🎉\n"
+                met_goal.append((user_id, goal_per_week, weekly_count))
             else:
-                leaderboard_message += f"👎 **<@{user_id}>** did not meet their goal of **{goal_per_week} workouts** with only **{weekly_count} logged**. 👎\n"
+                did_not_meet_goal.append((user_id, goal_per_week, weekly_count))
 
-        # Save updated data to ensure consistency (not strictly necessary since no destructive changes are made)
+        # Construct the leaderboard message
+        leaderboard_message = "📅 **Weekly Leaderboard Reset** 📅\n\n"
+
+        # Add users who met their goal
+        if met_goal:
+            leaderboard_message += "🎉 **Users Who Met Their Goal** 🎉\n"
+            for user_id, goal, count in met_goal:
+                leaderboard_message += f"**<@{user_id}>**: Goal **{goal}** - Logged **{count} workouts** ✅\n"
+            leaderboard_message += "\n"
+
+        # Add users who did not meet their goal
+        if did_not_meet_goal:
+            leaderboard_message += "👎 **Users Who Did Not Meet Their Goal** 👎\n"
+            for user_id, goal, count in did_not_meet_goal:
+                demeaning_message = generate_demeaning_message()
+                leaderboard_message += (
+                    f"**<@{user_id}>**: Goal **{goal}** - Logged **{count} workouts** ❌\n"
+                    f"> {demeaning_message}\n"
+                )
+
+        # Save updated data to ensure consistency
         self.save_data()
 
         # Send the consolidated leaderboard message
