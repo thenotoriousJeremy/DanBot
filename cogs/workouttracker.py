@@ -6,7 +6,6 @@ import asyncio
 from collections import defaultdict
 import json
 import os
-from datetime import timedelta
 from openai import OpenAI
 from dotenv import load_dotenv
 
@@ -42,7 +41,16 @@ def generate_demeaning_message():
             "That's just sad. Do better next time. 😒"
         )
 
-generate_demeaning_message()
+def get_next_weekly_reset():
+    now = datetime.now()
+    # Calculate the next Sunday at 22:59
+    days_until_sunday = (6 - now.weekday()) % 7  # Ensure it wraps around correctly
+    next_reset = now.replace(hour=22, minute=59, second=59, microsecond=0) + timedelta(days=days_until_sunday)
+    if next_reset < now:
+        # If the calculated time is in the past (e.g., it's already past 22:59 today)
+        next_reset += timedelta(weeks=1)
+    return next_reset
+
 
 class WorkoutTracker(commands.Cog):
     STORAGE_FILE = "workout_data.json"
@@ -256,19 +264,30 @@ class WorkoutTracker(commands.Cog):
 
 
     async def schedule_weekly_reset(self):
+        self.weekly_reset_time = get_next_weekly_reset()
+        print(f"Next weekly reset scheduled for: {self.weekly_reset_time}")
+
         while True:
-            now = datetime.now()
-            time_until_reset = (self.weekly_reset_time - now).total_seconds()
+            try:
+                now = datetime.now()
+                time_until_reset = (self.weekly_reset_time - now).total_seconds()
 
-            # Schedule reminders 6 hours before reset
-            if time_until_reset > self.warning_threshold:
-                await asyncio.sleep(time_until_reset - self.warning_threshold)
-                await self.send_reminders()
+                # Schedule reminders 6 hours before reset
+                if time_until_reset > self.warning_threshold:
+                    await asyncio.sleep(time_until_reset - self.warning_threshold)
+                    await self.send_reminders()
 
-            # Schedule the weekly reset
-            await asyncio.sleep(time_until_reset)
-            await self.reset_weekly_goals()
-            self.weekly_reset_time += timedelta(weeks=1)  # Schedule for next week
+                # Wait for the reset time
+                await asyncio.sleep(time_until_reset)
+                await self.reset_weekly_goals()
+
+                # Update to the next weekly reset
+                self.weekly_reset_time = get_next_weekly_reset()
+                print(f"Next weekly reset scheduled for: {self.weekly_reset_time}")
+            except Exception as e:
+                print(f"Error in schedule_weekly_reset: {e}")
+                await asyncio.sleep(60)  # Retry after a minute if an error occurs
+
 
     async def send_reminders(self):
         start_of_week = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=datetime.now().weekday())
@@ -290,56 +309,55 @@ class WorkoutTracker(commands.Cog):
                     print(f"Unable to send reminder to user {user_id}. DMs might be disabled.")
 
     async def reset_weekly_goals(self):
+        print("Running reset_weekly_goals...")
+
         channel = self.bot.get_channel(self.leaderboard_channel)
         if not channel:
             print(f"Leaderboard channel {self.leaderboard_channel} not found!")
             return
 
         start_of_week = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=datetime.now().weekday())
+        print(f"Start of week calculated as: {start_of_week}")
 
-        # Separate users into groups based on whether they met their goal
         met_goal = []
         did_not_meet_goal = []
 
         for user_id, (goal_per_week, _) in self.user_goals.items():
-            # Ensure the user's workout list is initialized
             if user_id not in self.user_workouts:
                 self.user_workouts[user_id] = []
 
-            # Filter weekly workouts (non-destructive)
             weekly_workouts = [workout for workout in self.user_workouts[user_id] if workout >= start_of_week]
             weekly_count = len(weekly_workouts)
+            print(f"User {user_id}: Goal = {goal_per_week}, Workouts Logged = {weekly_count}")
 
             if weekly_count >= goal_per_week:
                 met_goal.append((user_id, goal_per_week, weekly_count))
             else:
                 did_not_meet_goal.append((user_id, goal_per_week, weekly_count))
 
-        # Construct the leaderboard message
-        leaderboard_message = "📅 **Weekly Leaderboard Reset** 📅\n\n"
-
-        # Add users who met their goal
+        # Send users who met their goals in one grouped message
         if met_goal:
-            leaderboard_message += "🎉 **Users Who Met Their Goal** 🎉\n"
+            leaderboard_message = "🎉 **Users Who Met Their Goal** 🎉\n"
             for user_id, goal, count in met_goal:
                 leaderboard_message += f"**<@{user_id}>**: Goal **{goal}** - Logged **{count} workouts** ✅\n"
             leaderboard_message += "\n"
 
-        # Add users who did not meet their goal
-        if did_not_meet_goal:
-            leaderboard_message += "👎 **Users Who Did Not Meet Their Goal** 👎\n"
-            for user_id, goal, count in did_not_meet_goal:
-                demeaning_message = generate_demeaning_message()
-                leaderboard_message += (
-                    f"**<@{user_id}>**: Goal **{goal}** - Logged **{count} workouts** ❌\n"
-                    f"> {demeaning_message}\n"
-                )
+            await channel.send(leaderboard_message[:2000])  # Trim if necessary
 
-        # Save updated data to ensure consistency
+        # Send users who failed individually
+        for user_id, goal, count in did_not_meet_goal:
+            demeaning_message = generate_demeaning_message()
+            fail_message = (
+                f"👎 **You Did Not Meet Your Goal** 👎\n"
+                f"**<@{user_id}>**: Goal **{goal}** - Logged **{count} workouts** ❌\n"
+                f"> {demeaning_message}"
+                f"\n"
+            )
+            await channel.send(fail_message[:2000])  # Trim if necessary
+
         self.save_data()
+        print("Weekly goals reset and data saved!")
 
-        # Send the consolidated leaderboard message
-        await channel.send(leaderboard_message)
 
 async def setup(bot):
     await bot.add_cog(WorkoutTracker(bot))
