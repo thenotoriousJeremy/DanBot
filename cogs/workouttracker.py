@@ -130,7 +130,7 @@ class WorkoutTracker(commands.Cog):
 
             channel = interaction.channel
             if channel:
-                await channel.send(f"📢 {interaction.user.mention} has quit the workout tracker. Shame! 😡")
+                await channel.send(f"📢 {interaction.user.mention} has quit the workout tracker. I'm not really surprised. Are you?")
         else:
             await interaction.response.send_message("You're not currently participating in the tracker.", ephemeral=True)
 
