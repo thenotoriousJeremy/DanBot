@@ -27,9 +27,12 @@ def generate_demeaning_message():
         response = client.chat.completions.create(
             model="gpt-4o-mini",  # Use the updated model for generating messages
             messages=[
-                {"role": "system", "content": "You are a brutally honest and mean assistant."},
-                {"role": "user", "content": "Generate a mean/demeaning message for people who failed to meet their own workout goals for the week. Keep it unique, somber, insulting and brutally honest. No Exclamation marks"}
+                {"role": "developer", "content": "You are a brutally honest and mean assistant."},
+                {"role": "user", "content": """Generate a message as if coming from an extremely disappointed Rocky Balboa for a person who failed to meet their
+                  own workout goals for the week. Keep it a paragraph, unique, somber, and brutally honest. No Exclamation marks"""}
             ],
+            temperature=1.5, # Adjust the temperature for more or less randomness
+            # top_p=1.0  # Adjust the top_p value for more or less randomness
         )
         message = response.choices[0].message.content
         print(f"Generated demeaning message: {message}")  # Print the message to the terminal
@@ -40,7 +43,7 @@ def generate_demeaning_message():
             "Honestly, you set this goal for yourself, and you couldn't even stick to it for a single week. "
             "That's just sad. Do better next time. 😒"
         )
-
+generate_demeaning_message()
 def get_next_weekly_reset():
     now = datetime.now()
     # Calculate the next Sunday at 22:59
@@ -61,7 +64,7 @@ class WorkoutTracker(commands.Cog):
         self.user_goals = {}
         self.user_workouts = defaultdict(list)
         self.warning_threshold = 12 * 60 * 60  # 6 hours before reset
-        self.leaderboard_channel = 1115982069550559322  # Channel where leaderboard is posted
+        self.leaderboard_channel = 1327019216510910546  # Channel where leaderboard is posted
         self.weekly_reset_time = datetime.now().replace(hour=22, minute=59, second=59) + timedelta(days=(6 - datetime.now().weekday()))
         self.load_data()
         bot.loop.create_task(self.schedule_weekly_reset())
@@ -83,8 +86,6 @@ class WorkoutTracker(commands.Cog):
                 data = json.load(f)
                 self.user_goals = {int(key): value for key, value in data.get("user_goals", {}).items()}
                 self.user_workouts = {int(key): [datetime.fromisoformat(dt).replace(tzinfo=None) for dt in value] for key, value in data.get("user_workouts", {}).items()}
-            print(f"Loaded user goals: {self.user_goals}")
-            print(f"Loaded user workouts: {self.user_workouts}")
         else:
             print("No storage file found. Initializing empty data.")
             self.user_goals = {}
@@ -245,14 +246,13 @@ class WorkoutTracker(commands.Cog):
 
                 # Save the data and log publicly
                 self.save_data()
+                user_goal = self.user_goals[message.author.id][0]
                 await message.channel.send(
-                    f"Workout logged for {message.author.mention}! Total workouts this week: {total_workouts_this_week}."
+                    f"Workout logged for {message.author.mention}! Total workouts this week: {total_workouts_this_week} (Goal: {user_goal} workouts)."
                 )
 
                 # Debugging
                 print(f"Workout logged: {current_time}")
-                print(f"Start of week: {start_of_week}")
-                print(f"Weekly workouts: {weekly_workouts}")
 
             # Delete the confirmation exchange regardless of the response
             await confirmation_message.delete()
@@ -265,21 +265,23 @@ class WorkoutTracker(commands.Cog):
 
     async def schedule_weekly_reset(self):
         self.weekly_reset_time = get_next_weekly_reset()
-        print(f"Next weekly reset scheduled for: {self.weekly_reset_time}")
 
         while True:
             try:
                 now = datetime.now()
                 time_until_reset = (self.weekly_reset_time - now).total_seconds()
 
-                # Schedule reminders 6 hours before reset
+                # Schedule reminders 12 hours before reset
                 if time_until_reset > self.warning_threshold:
                     await asyncio.sleep(time_until_reset - self.warning_threshold)
                     await self.send_reminders()
-
-                # Wait for the reset time
-                await asyncio.sleep(time_until_reset)
+                    # Recalculate remaining time until reset
+                    remaining_time = (self.weekly_reset_time - datetime.now()).total_seconds()
+                    await asyncio.sleep(remaining_time)
+                else:
+                    await asyncio.sleep(time_until_reset)
                 await self.reset_weekly_goals()
+
 
                 # Update to the next weekly reset
                 self.weekly_reset_time = get_next_weekly_reset()
@@ -305,6 +307,7 @@ class WorkoutTracker(commands.Cog):
                     await user.send(
                         f"⚠️ Reminder: You haven't met your weekly workout goal of {goal_per_week} workouts. Log your workouts before the week resets!"
                     )
+                    print(f"Reminder sent to {user_id}.")
                 except discord.Forbidden:
                     print(f"Unable to send reminder to user {user_id}. DMs might be disabled.")
 
@@ -351,7 +354,7 @@ class WorkoutTracker(commands.Cog):
                 f"👎 **You Did Not Meet Your Goal** 👎\n"
                 f"**<@{user_id}>**: Goal **{goal}** - Logged **{count} workouts** ❌\n"
                 f"> {demeaning_message}"
-                f"\n"
+                f"\n - Rocky Balboawicz"
             )
             await channel.send(fail_message[:2000])  # Trim if necessary
 

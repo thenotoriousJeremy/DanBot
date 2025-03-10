@@ -106,7 +106,7 @@ class BirthdayCog(commands.Cog):
     async def birthday_reminder(self):
         today = datetime.now().strftime('%m-%d')
         next_week = (datetime.now() + timedelta(days=7)).strftime('%m-%d')
-        channel = discord.utils.get(self.bot.get_all_channels(), name='dpca-irl')  # Replace 'dpca-irl' with your channel name
+        channel = discord.utils.get(self.bot.get_all_channels(), name='chat-sponsored-by-raid-shadow-legends')  # Replace with your channel name
 
         if not channel:
             return
