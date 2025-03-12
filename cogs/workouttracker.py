@@ -16,6 +16,43 @@ OPENAI_TOKEN = os.getenv("OPENAI_TOKEN")
 if OPENAI_TOKEN:
     client = OpenAI(api_key=OPENAI_TOKEN)
 
+def calculate_streak(self, user_id: int) -> int:
+    """
+    Calculate the user's current streak based on consecutive weeks
+    in which they met their weekly workout goal.
+    """
+    # Get the user's workouts and goal
+    workouts = self.user_workouts.get(user_id, [])
+    if user_id not in self.user_goals:
+        return 0
+    goal = self.user_goals[user_id][0]
+    if goal <= 0:
+        return 0
+
+    # Sort the workout datetimes (if not already sorted)
+    workouts = sorted(workouts)
+
+    # Determine the start of the current week (using Monday 00:00)
+    now = datetime.now()
+    current_week_start = now.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=now.weekday())
+
+    streak = 0
+    week_start = current_week_start
+
+    # Iterate backwards week by week
+    while True:
+        week_end = week_start + timedelta(days=7)
+        # Count workouts in this week
+        week_count = sum(1 for workout in workouts if week_start <= workout < week_end)
+        if week_count >= goal:
+            streak += 1
+        else:
+            break  # Break on the first week where the goal wasn't met
+        week_start -= timedelta(days=7)  # Move to the previous week
+
+    return streak
+
+
 def generate_demeaning_message():
     if not OPENAI_TOKEN:
         return (
@@ -28,7 +65,7 @@ def generate_demeaning_message():
             model="gpt-4o-mini",  # Use the updated model for generating messages
             messages=[
                 {"role": "developer", "content": "You are a brutally honest and mean assistant."},
-                {"role": "user", "content": """Generate a message as if coming from an extremely disappointed Rocky Balboa for a person who failed to meet their
+                {"role": "user", "content": """Generate a message as if coming from an extremely disappointed friend for a person who failed to meet their
                   own workout goals for the week. Keep it a paragraph, unique, somber, and brutally honest. No Exclamation marks"""}
             ],
             temperature=1.5, # Adjust the temperature for more or less randomness
@@ -118,7 +155,7 @@ class WorkoutTracker(commands.Cog):
         self.user_workouts[interaction.user.id] = self.user_workouts.get(interaction.user.id, [])
 
 
-    @app_commands.command(name="opt_out", description="Opt out of the workout tracker.")
+    @app_commands.command(name="opt_out", description="Opt out of the workout tracker.", dm_permission=True)
     async def opt_out(self, interaction: discord.Interaction):
         if interaction.user.id in self.user_goals:
             del self.user_goals[interaction.user.id]
@@ -135,61 +172,76 @@ class WorkoutTracker(commands.Cog):
         else:
             await interaction.response.send_message("You're not currently participating in the tracker.", ephemeral=True)
 
-    @app_commands.command(name="leaderboard", description="View the workout leaderboard.")
+    @app_commands.command(name="leaderboard", description="View the workout leaderboard.", dm_permission=True)
     async def leaderboard(self, interaction: discord.Interaction):
         if not self.user_goals:
             await interaction.response.send_message("No one has logged any workouts yet! Be the first to start!", ephemeral=True)
             return
 
         # Calculate total workouts for all time
-        total_workouts = {
-            user_id: len(self.user_workouts.get(user_id, [])) for user_id in self.user_goals
-        }
-
-        # Sort users by total workouts
+        total_workouts = {user_id: len(self.user_workouts.get(user_id, [])) for user_id in self.user_goals}
         leaderboard = sorted(total_workouts.items(), key=lambda x: x[1], reverse=True)
-
-        # Build the leaderboard message
         leaderboard_message = "**🏋️ Workout Leaderboard (All-Time) 🏋️**\n\n"
+
         for i, (user_id, workout_count) in enumerate(leaderboard, start=1):
             member = interaction.guild.get_member(user_id)
             if not member:
-                # Fetch the member if not cached
                 try:
                     member = await interaction.guild.fetch_member(user_id)
                 except discord.NotFound:
                     member = None
 
-            if member:
-                display_name = member.display_name  # Use the display name (nickname or username fallback)
-            else:
-                display_name = f"Unknown User ({user_id})"  # Handle cases where the user can't be fetched
-            leaderboard_message += f"{i}. {display_name}: {workout_count} workouts\n"
+            display_name = member.display_name if member else f"Unknown User ({user_id})"
+            streak = self.calculate_streak(user_id)
+            streak_text = f" - Streak: **{streak} week{'s' if streak != 1 else ''}**" if streak > 0 else ""
+            leaderboard_message += f"{i}. {display_name}: {workout_count} workouts{streak_text}\n"
 
-        # Send the leaderboard
         await interaction.response.send_message(leaderboard_message, ephemeral=False)
 
-    @app_commands.command(name="my_workouts", description="Check how many workouts you've logged this week.")
+
+    @app_commands.command(name="my_workouts", description="Check how many workouts you've logged this week.", dm_permission=True)
     async def my_workouts(self, interaction: discord.Interaction):
         user_id = interaction.user.id
         start_of_week = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=datetime.now().weekday())
-        print(f"Start of week: {start_of_week}")
-
         user_workouts = self.user_workouts.get(user_id, [])
-        print(f"User workouts (raw): {user_workouts}")
-
         weekly_workouts = [workout for workout in user_workouts if workout >= start_of_week]
-        print(f"Weekly workouts: {weekly_workouts}")
-
         total_workouts = len(user_workouts)
         total_this_week = len(weekly_workouts)
+
+        # Calculate the streak dynamically
+        streak = self.calculate_streak(user_id)
+        streak_message = f" You're on a **{streak} week streak!**" if streak > 0 else ""
+
         await interaction.response.send_message(
-            f"You've logged **{total_this_week} workouts** this week and **{total_workouts} workouts** total! Keep it up! 🏋️",
+            f"You've logged **{total_this_week} workouts** this week and **{total_workouts} workouts** total!{streak_message} Keep it up! 🏋️",
             ephemeral=True
         )
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
+        # Skip messages from bots
+        if message.author.bot:
+            return
+
+        # Check if the message is a DM (i.e. no guild associated)
+        if message.guild is None:
+            # Use ChatGPT to generate a response to the DM content with a mean, brutally honest tone
+            try:
+                response = client.chat.completions.create(
+                    model="gpt-4o-mini",
+                    messages=[
+                        {"role": "developer", "content": "You are a brutally honest and mean friend named Dan."},
+                        {"role": "user", "content": message.content}
+                    ],
+                    temperature=1.0  # Adjust as needed for style consistency
+                )
+                reply = response.choices[0].message.content
+            except Exception as e:
+                print(f"Error generating DM reply: {e}")
+                reply = "Sorry, I encountered an error processing your request."
+            await message.channel.send(reply)
+            return
+
         if message.author.bot or not message.attachments:
             return
 
@@ -319,6 +371,7 @@ class WorkoutTracker(commands.Cog):
             print(f"Leaderboard channel {self.leaderboard_channel} not found!")
             return
 
+        # Calculate the start of this week (Monday 00:00)
         start_of_week = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=datetime.now().weekday())
         print(f"Start of week calculated as: {start_of_week}")
 
@@ -338,28 +391,32 @@ class WorkoutTracker(commands.Cog):
             else:
                 did_not_meet_goal.append((user_id, goal_per_week, weekly_count))
 
-        # Send users who met their goals in one grouped message
+        # Build and send the message for users who met their goals, including dynamic streak info
         if met_goal:
             leaderboard_message = "🎉 **Users Who Met Their Goal** 🎉\n"
             for user_id, goal, count in met_goal:
-                leaderboard_message += f"**<@{user_id}>**: Goal **{goal}** - Logged **{count} workouts** ✅\n"
+                streak = self.calculate_streak(user_id)
+                leaderboard_message += f"**<@{user_id}>**: Goal **{goal}** - Logged **{count} workouts**"
+                if streak > 0:
+                    leaderboard_message += f" - Streak: **{streak} week{'s' if streak != 1 else ''}**"
+                leaderboard_message += " ✅\n"
             leaderboard_message += "\n"
 
             await channel.send(leaderboard_message[:2000])  # Trim if necessary
 
-        # Send users who failed individually
+        # Send demeaning messages for users who did not meet their goals
         for user_id, goal, count in did_not_meet_goal:
             demeaning_message = generate_demeaning_message()
             fail_message = (
                 f"👎 **You Did Not Meet Your Goal** 👎\n"
                 f"**<@{user_id}>**: Goal **{goal}** - Logged **{count} workouts** ❌\n"
                 f"> {demeaning_message}"
-                f"\n - Rocky Balboawicz"
             )
             await channel.send(fail_message[:2000])  # Trim if necessary
 
         self.save_data()
         print("Weekly goals reset and data saved!")
+
 
 
 async def setup(bot):
