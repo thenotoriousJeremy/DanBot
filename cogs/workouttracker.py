@@ -16,43 +16,6 @@ OPENAI_TOKEN = os.getenv("OPENAI_TOKEN")
 if OPENAI_TOKEN:
     client = OpenAI(api_key=OPENAI_TOKEN)
 
-def calculate_streak(self, user_id: int) -> int:
-    """
-    Calculate the user's current streak based on consecutive weeks
-    in which they met their weekly workout goal.
-    """
-    # Get the user's workouts and goal
-    workouts = self.user_workouts.get(user_id, [])
-    if user_id not in self.user_goals:
-        return 0
-    goal = self.user_goals[user_id][0]
-    if goal <= 0:
-        return 0
-
-    # Sort the workout datetimes (if not already sorted)
-    workouts = sorted(workouts)
-
-    # Determine the start of the current week (using Monday 00:00)
-    now = datetime.now()
-    current_week_start = now.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=now.weekday())
-
-    streak = 0
-    week_start = current_week_start
-
-    # Iterate backwards week by week
-    while True:
-        week_end = week_start + timedelta(days=7)
-        # Count workouts in this week
-        week_count = sum(1 for workout in workouts if week_start <= workout < week_end)
-        if week_count >= goal:
-            streak += 1
-        else:
-            break  # Break on the first week where the goal wasn't met
-        week_start -= timedelta(days=7)  # Move to the previous week
-
-    return streak
-
-
 def generate_demeaning_message():
     if not OPENAI_TOKEN:
         return (
@@ -80,7 +43,7 @@ def generate_demeaning_message():
             "Honestly, you set this goal for yourself, and you couldn't even stick to it for a single week. "
             "That's just sad. Do better next time. 😒"
         )
-generate_demeaning_message()
+
 def get_next_weekly_reset():
     now = datetime.now()
     # Calculate the next Sunday at 22:59
@@ -106,6 +69,41 @@ class WorkoutTracker(commands.Cog):
         self.load_data()
         bot.loop.create_task(self.schedule_weekly_reset())
         print(f"Weekly reset scheduled for: {self.weekly_reset_time}")
+    
+    def calculate_streak(self, user_id: int) -> int:
+        workouts = self.user_workouts.get(user_id, [])
+        if user_id not in self.user_goals:
+            return 0
+        goal = self.user_goals[user_id][0]
+        if goal <= 0:
+            return 0
+
+        workouts = sorted(workouts)
+        now = datetime.now()
+        current_week_start = now.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=now.weekday())
+        current_week_end = current_week_start + timedelta(days=7)
+
+        streak = 0
+        # First, check the current week—even if it's still ongoing
+        current_week_count = sum(1 for workout in workouts if current_week_start <= workout < current_week_end)
+        if current_week_count >= goal:
+            streak += 1
+            # Start checking from the previous week
+            week_start = current_week_start - timedelta(days=7)
+        else:
+            # Otherwise, skip the current week and start from the previous week
+            week_start = current_week_start - timedelta(days=7)
+
+        # Now iterate backwards week by week
+        while True:
+            week_end = week_start + timedelta(days=7)
+            week_count = sum(1 for workout in workouts if week_start <= workout < week_end)
+            if week_count >= goal:
+                streak += 1
+            else:
+                break
+            week_start -= timedelta(days=7)
+        return streak
 
     def save_data(self):
         """Save user goals and workouts to a file."""
@@ -155,7 +153,7 @@ class WorkoutTracker(commands.Cog):
         self.user_workouts[interaction.user.id] = self.user_workouts.get(interaction.user.id, [])
 
 
-    @app_commands.command(name="opt_out", description="Opt out of the workout tracker.", dm_permission=True)
+    @app_commands.command(name="opt_out", description="Opt out of the workout tracker.")
     async def opt_out(self, interaction: discord.Interaction):
         if interaction.user.id in self.user_goals:
             del self.user_goals[interaction.user.id]
@@ -172,34 +170,46 @@ class WorkoutTracker(commands.Cog):
         else:
             await interaction.response.send_message("You're not currently participating in the tracker.", ephemeral=True)
 
-    @app_commands.command(name="leaderboard", description="View the workout leaderboard.", dm_permission=True)
+    @app_commands.command(name="leaderboard", description="View the workout leaderboard.")
     async def leaderboard(self, interaction: discord.Interaction):
         if not self.user_goals:
             await interaction.response.send_message("No one has logged any workouts yet! Be the first to start!", ephemeral=True)
             return
 
-        # Calculate total workouts for all time
+        # Calculate total workouts for all users
         total_workouts = {user_id: len(self.user_workouts.get(user_id, [])) for user_id in self.user_goals}
         leaderboard = sorted(total_workouts.items(), key=lambda x: x[1], reverse=True)
         leaderboard_message = "**🏋️ Workout Leaderboard (All-Time) 🏋️**\n\n"
 
         for i, (user_id, workout_count) in enumerate(leaderboard, start=1):
-            member = interaction.guild.get_member(user_id)
-            if not member:
+            # If in a guild, try to get the member; otherwise, fetch the user
+            if interaction.guild:
+                member = interaction.guild.get_member(user_id)
+                if not member:
+                    try:
+                        member = await interaction.guild.fetch_member(user_id)
+                    except discord.NotFound:
+                        member = None
+            else:
                 try:
-                    member = await interaction.guild.fetch_member(user_id)
-                except discord.NotFound:
+                    member = await self.bot.fetch_user(user_id)
+                except Exception:
                     member = None
 
-            display_name = member.display_name if member else f"Unknown User ({user_id})"
-            streak = self.calculate_streak(user_id)
-            streak_text = f" - Streak: **{streak} week{'s' if streak != 1 else ''}**" if streak > 0 else ""
-            leaderboard_message += f"{i}. {display_name}: {workout_count} workouts{streak_text}\n"
+            # Use the display name if available, otherwise fallback to username or user id
+            if member:
+                # Some objects returned by fetch_user don't have display_name, so fallback to name.
+                display_name = getattr(member, "display_name", None) or getattr(member, "name", None) or f"User {user_id}"
+            else:
+                display_name = f"Unknown User ({user_id})"
+
+            leaderboard_message += f"{i}. {display_name}: {workout_count} workouts\n"
 
         await interaction.response.send_message(leaderboard_message, ephemeral=False)
 
 
-    @app_commands.command(name="my_workouts", description="Check how many workouts you've logged this week.", dm_permission=True)
+
+    @app_commands.command(name="my_workouts", description="Check how many workouts you've logged this week.")
     async def my_workouts(self, interaction: discord.Interaction):
         user_id = interaction.user.id
         start_of_week = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=datetime.now().weekday())

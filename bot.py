@@ -39,6 +39,8 @@ async def on_ready():
     print("Fish Speech cog loaded!")
     await bot.load_extension("cogs.workouttracker")
     print("WorkoutTracker cog loaded!")
+    await bot.load_extension("cogs.connectionchart")
+    print("Connection Chart cog loaded!")
 
     # Sync slash commands globally
     try:
@@ -46,6 +48,10 @@ async def on_ready():
         print("Slash commands synced globally!")
     except Exception as e:
         print(f"Failed to sync commands: {e}")
+
+    for command in bot.tree.get_commands():
+        command.dm_permission = True
+    print("All commands set to work in DMs!")
 
 # Run the bot
 bot.run(TOKEN)
