@@ -130,12 +130,12 @@ class ConnectionChart(commands.Cog):
         nx.draw_networkx_edges(
             G, pos, 
             edge_color=edge_colors, 
-            width=6, 
+            width=10, 
             ax=ax,
             arrows=True, 
             arrowstyle='-', 
-            connectionstyle='arc3, rad=0.5',
-            alpha=0.8
+            connectionstyle='arc3, rad=0.3',
+            alpha=0.75
         )
 
 
@@ -165,7 +165,7 @@ class ConnectionChart(commands.Cog):
                     response = requests.get(avatar_url)
                     img_data = BytesIO(response.content)
                     avatar_img = Image.open(img_data).convert("RGBA")
-                    size = (64, 64)  # Display size for avatars
+                    size = (50, 50)  # Display size for avatars
                     avatar_img = avatar_img.resize(size, resample)
                     # Create a circular mask.
                     mask = Image.new("L", size, 0)

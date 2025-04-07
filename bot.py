@@ -41,6 +41,8 @@ async def on_ready():
     print("WorkoutTracker cog loaded!")
     await bot.load_extension("cogs.connectionchart")
     print("Connection Chart cog loaded!")
+    await bot.load_extension("cogs.music")
+    print("Music cog loaded!")
 
     # Sync slash commands globally
     try:
