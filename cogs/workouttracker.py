@@ -57,21 +57,24 @@ class WorkoutTracker(commands.Cog):
 
     def __init__(self, bot):
         self.bot = bot
-        # OLD JSON format: user_goals maps user_id to an integer (the weekly goal)
+        # Using the old JSON format for core data:
+        # user_goals maps user_id (int) to an integer representing the weekly goal.
         self.user_goals = {}
+        # user_workouts maps user_id to a list of ISO-formatted datetime strings.
         self.user_workouts = defaultdict(list)
-        # Pending reactions: maps user_id (as a string) to {"message_id": int, "timestamp": isoformat string}
+        # New feature: pending_reactions will store pending reaction data
+        # as a dictionary mapping user_id (as a string) to {"message_id": int, "timestamp": isoformat string}
         self.pending_reactions = {}
         self.warning_threshold = 12 * 60 * 60  # 6 hours before reset (in seconds)
         self.leaderboard_channel = 1327019216510910546  # Channel where leaderboard is posted
         self.weekly_reset_time = get_next_weekly_reset()
-        self.miss_threshold = 2  # Number of consecutive missed weeks to trigger reaction requirement
+        self.miss_threshold = 2  # Number of consecutive missed weeks to trigger the reaction requirement
         self.load_data()
         bot.loop.create_task(self.schedule_weekly_reset())
         print(f"Weekly reset scheduled for: {self.weekly_reset_time}")
 
     def get_goal(self, user_id: int) -> int:
-        """Return the workout goal for the user as an integer."""
+        """Return the workout goal for a user as an integer. If stored as a list, return its first element."""
         goal = self.user_goals.get(user_id)
         if isinstance(goal, list):
             return goal[0]
@@ -108,7 +111,7 @@ class WorkoutTracker(commands.Cog):
     def calculate_consecutive_misses(self, user_id: int) -> int:
         """
         Calculate the number of consecutive full weeks (before the current week)
-        in which the user missed their goal.
+        in which the user missed their goal. This is computed at runtime based on the workout logs.
         """
         if user_id not in self.user_goals or self.get_goal(user_id) <= 0:
             return 0
@@ -142,16 +145,17 @@ class WorkoutTracker(commands.Cog):
         if os.path.exists(self.STORAGE_FILE):
             with open(self.STORAGE_FILE, "r") as f:
                 data = json.load(f)
-                # Assume user_goals stored as integers or lists.
+                # Continue using the old format for user_goals and user_workouts.
                 self.user_goals = {int(key): value for key, value in data.get("user_goals", {}).items()}
                 self.user_workouts = {int(key): [datetime.fromisoformat(dt).replace(tzinfo=None) for dt in value]
                                       for key, value in data.get("user_workouts", {}).items()}
-                self.pending_reactions = data.get("pending_reactions", {})
+                self.pending_reactions = data.get("pending_reactions", {})  # New key; defaults to {} if not present.
         else:
             print("No storage file found. Initializing empty data.")
             self.user_goals = {}
             self.user_workouts = defaultdict(list)
             self.pending_reactions = {}
+        # Ensure every user in user_goals has a workout list.
         for user_id in self.user_goals:
             if user_id not in self.user_workouts:
                 print(f"Initializing missing workouts for user {user_id}.")
@@ -187,7 +191,7 @@ class WorkoutTracker(commands.Cog):
     async def opt_out(self, interaction: discord.Interaction):
         if interaction.user.id in self.user_goals:
             del self.user_goals[interaction.user.id]
-            # DO NOT delete their workouts; we keep historical data.
+            # Do not delete workout logs; just stop tracking.
             if str(interaction.user.id) in self.pending_reactions:
                 del self.pending_reactions[str(interaction.user.id)]
             self.save_data()
@@ -307,6 +311,8 @@ class WorkoutTracker(commands.Cog):
             if reply.content.lower() == 'yes':
                 current_time = datetime.now()
                 self.user_workouts[message.author.id].append(current_time)
+                # Save immediately after logging the workout.
+                self.save_data()
                 start_of_week = current_time.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=current_time.weekday())
                 weekly_workouts = [workout for workout in self.user_workouts[message.author.id] if workout >= start_of_week]
                 total_workouts_this_week = len(weekly_workouts)

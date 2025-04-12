@@ -59,8 +59,6 @@ class YouTubeMusic(commands.Cog):
                 asyncio.create_task, self.play_next(interaction)))
             # Use the text channel to send a message (since the interaction has been responded to already)
             await interaction.channel.send(f"Now playing: **{next_song.title}**")
-        else:
-            await interaction.channel.send("Queue is empty.")
 
     @app_commands.command(name="join", description="Joins your current voice channel.")
     async def join(self, interaction: discord.Interaction):
