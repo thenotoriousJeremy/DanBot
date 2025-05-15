@@ -3,6 +3,11 @@ from discord.ext import commands
 from discord import app_commands
 import yt_dlp
 import asyncio
+import os
+cookies_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "cookies.txt")
+print("Using cookies file at:", cookies_path)
+print("Cookies file exists?", os.path.exists(cookies_path))
+
 
 # Updated yt-dlp options with default_search.
 ytdl_format_options = {
@@ -10,7 +15,7 @@ ytdl_format_options = {
     'default_search': 'ytsearch',  # Automatically search YouTube if query is not a URL.
     'noplaylist': True,
     'quiet': True,
-    'cookies': 'cookies.txt'
+    'cookies': 'cookies.txt',  # Path to your cookies file
 }
 ffmpeg_options = {
     'options': '-vn'

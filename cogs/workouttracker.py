@@ -57,85 +57,86 @@ class WorkoutTracker(commands.Cog):
 
     def __init__(self, bot):
         self.bot = bot
-        # Using the old JSON format for core data:
         # user_goals maps user_id (int) to an integer representing the weekly goal.
         self.user_goals = {}
-        # user_workouts maps user_id to a list of ISO-formatted datetime strings.
+        # user_workouts maps user_id to a list of datetime objects.
         self.user_workouts = defaultdict(list)
-        # New feature: pending_reactions will store pending reaction data
-        # as a dictionary mapping user_id (as a string) to {"message_id": int, "timestamp": isoformat string}
+        # pending_reactions maps user_id (as str) to {"message_id": int, "timestamp": isoformat str}
         self.pending_reactions = {}
-        self.warning_threshold = 12 * 60 * 60  # 6 hours before reset (in seconds)
-        self.leaderboard_channel = 1327019216510910546  # Channel where leaderboard is posted
+        self.warning_threshold = 12 * 60 * 60  # 6 hours before reset
+        self.leaderboard_channel = 1327019216510910546
         self.weekly_reset_time = get_next_weekly_reset()
-        self.miss_threshold = 2  # Number of consecutive missed weeks to trigger the reaction requirement
+        self.miss_threshold = 2  # Consecutive missed weeks before requiring reaction
         self.load_data()
         bot.loop.create_task(self.schedule_weekly_reset())
         print(f"Weekly reset scheduled for: {self.weekly_reset_time}")
 
     def get_goal(self, user_id: int) -> int:
-        """Return the workout goal for a user as an integer. If stored as a list, return its first element."""
-        goal = self.user_goals.get(user_id)
+        """Return the workout goal for a user as an integer."""
+        goal = self.user_goals.get(user_id, 0)
+        # In case we ever still had a list, take first element
         if isinstance(goal, list):
             return goal[0]
         return goal
 
     def calculate_streak(self, user_id: int) -> int:
-        workouts = self.user_workouts.get(user_id, [])
-        if user_id not in self.user_goals or self.get_goal(user_id) <= 0:
+        workouts = sorted(self.user_workouts.get(user_id, []))
+        goal = self.get_goal(user_id)
+        if goal <= 0:
             return 0
 
-        workouts = sorted(workouts)
         now = datetime.now()
+        # Determine current week boundaries
         current_week_start = now.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=now.weekday())
         current_week_end = current_week_start + timedelta(days=7)
 
         streak = 0
-        current_week_count = sum(1 for workout in workouts if current_week_start <= workout < current_week_end)
-        if current_week_count >= self.get_goal(user_id):
+        # Check this week
+        current_week_count = sum(1 for w in workouts if current_week_start <= w < current_week_end)
+        if current_week_count >= goal:
             streak += 1
             week_start = current_week_start - timedelta(days=7)
         else:
             week_start = current_week_start - timedelta(days=7)
 
+        # Check previous weeks
         while True:
             week_end = week_start + timedelta(days=7)
-            week_count = sum(1 for workout in workouts if week_start <= workout < week_end)
-            if week_count >= self.get_goal(user_id):
+            week_count = sum(1 for w in workouts if week_start <= w < week_end)
+            if week_count >= goal:
                 streak += 1
+                week_start -= timedelta(days=7)
             else:
                 break
-            week_start -= timedelta(days=7)
+
         return streak
 
     def calculate_consecutive_misses(self, user_id: int) -> int:
-        """
-        Calculate the number of consecutive full weeks (before the current week)
-        in which the user missed their goal. This is computed at runtime based on the workout logs.
-        """
-        if user_id not in self.user_goals or self.get_goal(user_id) <= 0:
-            return 0
-
         workouts = sorted(self.user_workouts.get(user_id, []))
         goal = self.get_goal(user_id)
+        if goal <= 0:
+            return 0
+
         now = datetime.now()
         current_week_start = now.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=now.weekday())
         consecutive_misses = 0
         week_start = current_week_start - timedelta(days=7)
+
         while True:
             week_end = week_start + timedelta(days=7)
-            week_count = sum(1 for workout in workouts if week_start <= workout < week_end)
+            week_count = sum(1 for w in workouts if week_start <= w < week_end)
             if week_count < goal:
                 consecutive_misses += 1
+                week_start -= timedelta(days=7)
             else:
                 break
-            week_start -= timedelta(days=7)
+
         return consecutive_misses
 
     def save_data(self):
         data = {
             "user_goals": self.user_goals,
-            "user_workouts": {str(key): [dt.isoformat() for dt in value] for key, value in self.user_workouts.items()},
+            "user_workouts": {str(uid): [dt.isoformat() for dt in wlist] for uid, wlist in self.user_workouts.items()},
             "pending_reactions": self.pending_reactions
         }
         with open(self.STORAGE_FILE, "w") as f:
@@ -145,25 +146,26 @@ class WorkoutTracker(commands.Cog):
         if os.path.exists(self.STORAGE_FILE):
             with open(self.STORAGE_FILE, "r") as f:
                 data = json.load(f)
-                # Continue using the old format for user_goals and user_workouts.
-                self.user_goals = {int(key): value for key, value in data.get("user_goals", {}).items()}
-                self.user_workouts = {int(key): [datetime.fromisoformat(dt).replace(tzinfo=None) for dt in value]
-                                      for key, value in data.get("user_workouts", {}).items()}
-                self.pending_reactions = data.get("pending_reactions", {})  # New key; defaults to {} if not present.
+            # Unwrap any list-valued goals so everything is an int
+            self.user_goals = {
+                int(uid): (val[0] if isinstance(val, list) else val)
+                for uid, val in data.get("user_goals", {}).items()
+            }
+            # Load workouts
+            self.user_workouts = defaultdict(list, {
+                int(uid): [datetime.fromisoformat(dt) for dt in dt_list]
+                for uid, dt_list in data.get("user_workouts", {}).items()
+            })
+            self.pending_reactions = data.get("pending_reactions", {})
         else:
             print("No storage file found. Initializing empty data.")
             self.user_goals = {}
             self.user_workouts = defaultdict(list)
             self.pending_reactions = {}
-        # Ensure every user in user_goals has a workout list.
-        for user_id in self.user_goals:
-            if user_id not in self.user_workouts:
-                print(f"Initializing missing workouts for user {user_id}.")
-                self.user_workouts[user_id] = []
-
-    def cog_unload(self):
-        self.save_data()
-        self.reset_task.cancel()
+        # Ensure every tracked user has a workouts list
+        for uid in list(self.user_goals.keys()):
+            if uid not in self.user_workouts:
+                self.user_workouts[uid] = []
 
     @app_commands.command(name="set_goal", description="Set your weekly workout goal and opt in to tracking.")
     async def set_goal(self, interaction: discord.Interaction, goal_per_week: int):
@@ -183,28 +185,24 @@ class WorkoutTracker(commands.Cog):
             await channel.send(
                 f"📢 {interaction.user.mention} has joined the workout tracker with a goal of {goal_per_week} workouts per week!"
             )
-        
+        # Initialize workout list if needed
         if interaction.user.id not in self.user_workouts:
             self.user_workouts[interaction.user.id] = []
 
     @app_commands.command(name="opt_out", description="Opt out of the workout tracker.")
     async def opt_out(self, interaction: discord.Interaction):
-        if interaction.user.id in self.user_goals:
-            del self.user_goals[interaction.user.id]
-            # Do not delete workout logs; just stop tracking.
-            if str(interaction.user.id) in self.pending_reactions:
-                del self.pending_reactions[str(interaction.user.id)]
+        uid = interaction.user.id
+        if uid in self.user_goals:
+            del self.user_goals[uid]
+            self.pending_reactions.pop(str(uid), None)
             self.save_data()
 
             await interaction.response.send_message(
                 "You have opted out of the workout tracker. But remember, quitting is for the weak! 😠", ephemeral=False
             )
-
             channel = interaction.channel
             if channel:
-                await channel.send(
-                    f"📢 {interaction.user.mention} has quit the workout tracker. I'm not really surprised. Are you?"
-                )
+                await channel.send(f"📢 {interaction.user.mention} has quit the workout tracker. I'm not really surprised.")
         else:
             await interaction.response.send_message("You're not currently participating in the tracker.", ephemeral=True)
 
@@ -214,47 +212,35 @@ class WorkoutTracker(commands.Cog):
             await interaction.response.send_message("No one has logged any workouts yet! Be the first to start!", ephemeral=True)
             return
 
-        total_workouts = {user_id: len(self.user_workouts.get(user_id, [])) for user_id in self.user_goals}
+        total_workouts = {uid: len(self.user_workouts.get(uid, [])) for uid in self.user_goals}
         leaderboard = sorted(total_workouts.items(), key=lambda x: x[1], reverse=True)
-        leaderboard_message = "**🏋️ Workout Leaderboard (All-Time) 🏋️**\n\n"
+        msg = "**🏋️ Workout Leaderboard (All-Time) 🏋️**\n\n"
 
-        for i, (user_id, workout_count) in enumerate(leaderboard, start=1):
-            if interaction.guild:
-                member = interaction.guild.get_member(user_id)
-                if not member:
-                    try:
-                        member = await interaction.guild.fetch_member(user_id)
-                    except discord.NotFound:
-                        member = None
-            else:
+        for i, (uid, count) in enumerate(leaderboard, start=1):
+            member = interaction.guild.get_member(uid) if interaction.guild else None
+            if not member:
                 try:
-                    member = await self.bot.fetch_user(user_id)
-                except Exception:
+                    member = await self.bot.fetch_user(uid)
+                except:
                     member = None
+            name = member.display_name if member else f"User {uid}"
+            msg += f"{i}. {name}: {count} workouts\n"
 
-            if member:
-                display_name = getattr(member, "display_name", None) or getattr(member, "name", None) or f"User {user_id}"
-            else:
-                display_name = f"Unknown User ({user_id})"
-
-            leaderboard_message += f"{i}. {display_name}: {workout_count} workouts\n"
-
-        await interaction.response.send_message(leaderboard_message, ephemeral=False)
+        await interaction.response.send_message(msg, ephemeral=False)
 
     @app_commands.command(name="my_workouts", description="Check how many workouts you've logged this week.")
     async def my_workouts(self, interaction: discord.Interaction):
-        user_id = interaction.user.id
-        start_of_week = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=datetime.now().weekday())
-        user_workouts = self.user_workouts.get(user_id, [])
-        weekly_workouts = [workout for workout in user_workouts if workout >= start_of_week]
-        total_workouts = len(user_workouts)
-        total_this_week = len(weekly_workouts)
-
-        streak = self.calculate_streak(user_id)
-        streak_message = f" You're on a **{streak} week streak!**" if streak > 0 else ""
-
+        uid = interaction.user.id
+        now = datetime.now()
+        week_start = now.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=now.weekday())
+        all_w = self.user_workouts.get(uid, [])
+        this_week = [w for w in all_w if w >= week_start]
+        total = len(all_w)
+        weekly = len(this_week)
+        streak = self.calculate_streak(uid)
+        streak_msg = f" You're on a **{streak} week streak!**" if streak > 0 else ""
         await interaction.response.send_message(
-            f"You've logged **{total_this_week} workouts** this week and **{total_workouts} workouts** total! (Goal: {self.get_goal(user_id)} workouts).{streak_message} Keep it up! 🏋️",
+            f"You've logged **{weekly} workouts** this week and **{total} total**! (Goal: {self.get_goal(uid)}).{streak_msg}", 
             ephemeral=True
         )
 
@@ -263,6 +249,7 @@ class WorkoutTracker(commands.Cog):
         if message.author.bot:
             return
 
+        # Handle DMs with mean replies
         if message.guild is None:
             try:
                 response = client.chat.completions.create(
@@ -273,89 +260,65 @@ class WorkoutTracker(commands.Cog):
                     ],
                     temperature=1.0
                 )
-                reply = response.choices[0].message.content
-            except Exception as e:
-                print(f"Error generating DM reply: {e}")
-                reply = "Sorry, I encountered an error processing your request."
-            await message.channel.send(reply)
+                await message.channel.send(response.choices[0].message.content)
+            except:
+                await message.channel.send("Sorry, I encountered an error processing your request.")
             return
 
-        if message.author.bot or not message.attachments:
+        # If this is the workout‐thread image check
+        if not message.attachments or not isinstance(message.channel, discord.Thread) or message.channel.id != self.SPECIFIC_THREAD_ID:
             return
-
-        if not isinstance(message.channel, discord.Thread) or message.channel.id != self.SPECIFIC_THREAD_ID:
-            print(f"Wrong thread: {message.channel.id}")
-            return
-
         if message.author.id not in self.user_goals:
-            print(f"User {message.author.id} is not opted into the workout tracker.")
             return
-
-        if message.author.id not in self.user_workouts:
-            print(f"Initializing workout list for user {message.author.id}.")
-            self.user_workouts[message.author.id] = []
-
-        confirmation_message = await message.channel.send(
-            f"{message.author.mention}, did you just post a workout image? Reply with 'yes' or 'no'."
-        )
-
-        def check(reply):
-            return (
-                reply.channel == message.channel
-                and reply.author == message.author
-                and reply.content.lower() in ['yes', 'no']
-            )
-
+        # Ask for confirmation
+        confirm = await message.channel.send(f"{message.author.mention}, did you just post a workout image? Reply 'yes' or 'no'.")
+        def check(m):
+            return m.author == message.author and m.channel == message.channel and m.content.lower() in ("yes","no")
         try:
-            reply = await self.bot.wait_for('message', timeout=60.0, check=check)
-            if reply.content.lower() == 'yes':
-                current_time = datetime.now()
-                self.user_workouts[message.author.id].append(current_time)
-                # Save immediately after logging the workout.
+            reply = await self.bot.wait_for("message", timeout=60, check=check)
+            if reply.content.lower() == "yes":
+                now = datetime.now()
+                self.user_workouts[message.author.id].append(now)
                 self.save_data()
-                start_of_week = current_time.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=current_time.weekday())
-                weekly_workouts = [workout for workout in self.user_workouts[message.author.id] if workout >= start_of_week]
-                total_workouts_this_week = len(weekly_workouts)
+                # Count this week’s total
+                ws = now.replace(hour=0,minute=0,second=0,microsecond=0) - timedelta(days=now.weekday())
+                count = sum(1 for w in self.user_workouts[message.author.id] if w >= ws)
                 await message.channel.send(
-                    f"Workout logged for {message.author.mention}! Total workouts this week: {total_workouts_this_week} (Goal: {self.get_goal(message.author.id)} workouts)."
+                    f"Workout logged for {message.author.mention}! Total this week: {count} (Goal: {self.get_goal(message.author.id)})."
                 )
-                print(f"Workout logged: {current_time}")
-            await confirmation_message.delete()
+            await confirm.delete()
             await reply.delete()
         except asyncio.TimeoutError:
-            await confirmation_message.delete()
+            await confirm.delete()
 
     async def schedule_weekly_reset(self):
         self.weekly_reset_time = get_next_weekly_reset()
-
         while True:
             try:
                 now = datetime.now()
-                time_until_reset = (self.weekly_reset_time - now).total_seconds()
-
-                if time_until_reset > self.warning_threshold:
-                    await asyncio.sleep(time_until_reset - self.warning_threshold)
+                delay = (self.weekly_reset_time - now).total_seconds()
+                # send warning
+                if delay > self.warning_threshold:
+                    await asyncio.sleep(delay - self.warning_threshold)
                     await self.send_reminders()
-                    remaining_time = (self.weekly_reset_time - datetime.now()).total_seconds()
-                    await asyncio.sleep(remaining_time)
+                    await asyncio.sleep(self.warning_threshold)
                 else:
-                    await asyncio.sleep(time_until_reset)
+                    await asyncio.sleep(delay)
+                # do the reset
                 await self.reset_weekly_goals()
-
                 self.weekly_reset_time = get_next_weekly_reset()
                 print(f"Next weekly reset scheduled for: {self.weekly_reset_time}")
             except Exception as e:
                 print(f"Error in schedule_weekly_reset: {e}")
                 await asyncio.sleep(60)
-    
-    async def send_reminders(self):
-        start_of_week = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=datetime.now().weekday())
 
-        for user_id, goal in self.user_goals.items():
-            if user_id not in self.user_workouts:
-                self.user_workouts[user_id] = []
-            weekly_workouts = [workout for workout in self.user_workouts[user_id] if workout >= start_of_week]
-            if len(weekly_workouts) < goal:
+    async def send_reminders(self):
+        start_of_week = datetime.now().replace(hour=0,minute=0,second=0,microsecond=0) - timedelta(days=datetime.now().weekday())
+        for user_id in list(self.user_goals.keys()):
+            goal = self.get_goal(user_id)
+            workouts = self.user_workouts.get(user_id, [])
+            weekly = [w for w in workouts if w >= start_of_week]
+            if len(weekly) < goal:
                 try:
                     user = await self.bot.fetch_user(user_id)
                     await user.send(
@@ -372,85 +335,66 @@ class WorkoutTracker(commands.Cog):
             print(f"Leaderboard channel {self.leaderboard_channel} not found!")
             return
 
-        start_of_week = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=datetime.now().weekday())
-        print(f"Start of week calculated as: {start_of_week}")
-
-        met_goal = []
-        did_not_meet_goal = []
-
-        for user_id, goal in self.user_goals.items():
-            if user_id not in self.user_workouts:
-                self.user_workouts[user_id] = []
-            weekly_workouts = [workout for workout in self.user_workouts[user_id] if workout >= start_of_week]
-            weekly_count = len(weekly_workouts)
-            print(f"User {user_id}: Goal = {goal}, Workouts Logged = {weekly_count}")
-
+        start_of_week = datetime.now().replace(hour=0,minute=0,second=0,microsecond=0) - timedelta(days=datetime.now().weekday())
+        met, missed = [], []
+        # Partition users
+        for uid in list(self.user_goals.keys()):
+            goal = self.get_goal(uid)
+            workouts = self.user_workouts.get(uid, [])
+            weekly_count = sum(1 for w in workouts if w >= start_of_week)
             if weekly_count >= goal:
-                met_goal.append((user_id, goal, weekly_count))
+                met.append((uid, goal, weekly_count))
             else:
-                consecutive_misses = self.calculate_consecutive_misses(user_id)
-                did_not_meet_goal.append((user_id, goal, weekly_count, consecutive_misses))
+                misses = self.calculate_consecutive_misses(uid)
+                missed.append((uid, goal, weekly_count, misses))
 
-        if met_goal:
-            leaderboard_message = "🎉 **Users Who Met Their Goal** 🎉\n"
-            for user_id, goal, count in met_goal:
-                streak = self.calculate_streak(user_id)
-                leaderboard_message += f"**<@{user_id}>**: Goal **{goal}** - Logged **{count} workouts**"
-                if streak > 0:
-                    leaderboard_message += f" - Streak: **{streak} week{'s' if streak != 1 else ''}**"
-                leaderboard_message += " ✅\n"
-            leaderboard_message += "\n"
-            await channel.send(leaderboard_message[:2000])
+        # Announce who hit their goals
+        if met:
+            msg = "🎉 **Users Who Met Their Goal** 🎉\n"
+            for uid, g, c in met:
+                s = self.calculate_streak(uid)
+                msg += f"**<@{uid}>**: Goal **{g}** - Logged **{c}**"
+                if s:
+                    msg += f" - Streak: **{s} week{'s' if s>1 else ''}**"
+                msg += " ✅\n"
+            await channel.send(msg[:2000])
 
-        # Process pending reactions from previous resets.
-        for user_id_str in list(self.pending_reactions.keys()):
-            uid = int(user_id_str)
-            pending = self.pending_reactions[user_id_str]
+        # Process old pending reactions
+        for uid_str, pend in list(self.pending_reactions.items()):
+            uid = int(uid_str)
             try:
-                pending_msg = await channel.fetch_message(pending["message_id"])
-                reacted = False
-                for reaction in pending_msg.reactions:
-                    if str(reaction.emoji) == "👍":
-                        users = await reaction.users().flatten()
-                        if any(u.id == uid for u in users):
-                            reacted = True
-                            break
+                msg = await channel.fetch_message(pend["message_id"])
+                reacted = any(
+                    str(r.emoji) == "👍" and any(u.id == uid for u in await r.users().flatten())
+                    for r in msg.reactions
+                )
                 if reacted:
-                    await channel.send(f"<@{uid}> acknowledged the reminder and remains in the tracker.")
-                    del self.pending_reactions[user_id_str]
+                    await channel.send(f"<@{uid}> acknowledged and remains in the tracker.")
                 else:
-                    pending_time = datetime.fromisoformat(pending["timestamp"])
-                    if datetime.now() - pending_time > timedelta(weeks=1):
-                        await channel.send(f"<@{uid}> did not acknowledge the reminder and has been removed from tracking.")
-                        if uid in self.user_goals:
-                            del self.user_goals[uid]
-                        # Do not delete their workout logs.
-                        del self.pending_reactions[user_id_str]
+                    ts = datetime.fromisoformat(pend["timestamp"])
+                    if datetime.now() - ts > timedelta(weeks=1):
+                        await channel.send(f"<@{uid}> did not acknowledge and has been removed.")
+                        self.user_goals.pop(uid, None)
+                del self.pending_reactions[uid_str]
             except Exception as e:
                 print(f"Error checking pending reaction for user {uid}: {e}")
-                del self.pending_reactions[user_id_str]
+                del self.pending_reactions[uid_str]
 
-        # Process new failures.
-        for user_id, goal, count, misses in did_not_meet_goal:
+        # Announce failures
+        for uid, g, c, misses in missed:
+            dm = generate_demeaning_message(misses)
             if misses < self.miss_threshold:
-                demeaning_message = generate_demeaning_message(misses)
-                fail_message = (
-                    f"👎 **You Did Not Meet Your Goal** 👎\n"
-                    f"**<@{user_id}>**: Goal **{goal}** - Logged **{count} workouts** ❌\n"
-                    f"> {demeaning_message}"
-                )
-                await channel.send(fail_message[:2000])
+                text = f"**<@{uid}>**: Goal **{g}** - Logged **{c}** ❌\n> {dm}"
+                await channel.send(text[:2000])
             else:
-                demeaning_message = generate_demeaning_message(misses)
-                fail_message = (
-                    f"👎 **You Did Not Meet Your Goal for {misses} consecutive week{'s' if misses != 1 else ''}** 👎\n"
-                    f"**<@{user_id}>**: Goal **{goal}** - Logged **{count} workouts** ❌\n"
-                    f"> {demeaning_message}\n"
-                    f"Please react with 👍 within 1 week to acknowledge and remain in the tracker. Otherwise, you will be removed from tracking."
+                text = (
+                    f"**<@{uid}>**: Goal **{g}** - Logged **{c}** ❌\n"
+                    f"You missed **{misses} consecutive week{'s' if misses>1 else ''}**\n> {dm}\n"
+                    "React with 👍 within 1 week to stay in the tracker."
                 )
-                sent_message = await channel.send(fail_message[:2000])
-                self.pending_reactions[str(user_id)] = {
-                    "message_id": sent_message.id,
+                sent = await channel.send(text[:2000])
+                self.pending_reactions[str(uid)] = {
+                    "message_id": sent.id,
                     "timestamp": datetime.now().isoformat()
                 }
 
