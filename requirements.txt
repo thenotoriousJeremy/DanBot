@@ -1,9 +1,11 @@
 discord.py
 python-dotenv
-matplotlib 
-pandas 
-pillow
+requests
+Pillow
+matplotlib
+networkx
 wordcloud
+yt-dlp
 pytz
-fish-audio-sdk
 openai
+fish-audio-sdk
