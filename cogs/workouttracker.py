@@ -8,6 +8,15 @@ import json
 import os
 from openai import OpenAI
 from dotenv import load_dotenv
+from io import BytesIO
+
+# plotting/image libs
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+import numpy as np
+from PIL import Image, ImageDraw
+from matplotlib.offsetbox import OffsetImage, AnnotationBbox
 
 # Load environment variables
 load_dotenv()
@@ -29,12 +38,10 @@ def generate_demeaning_message(missed_weeks: int):
             messages=[
                 {"role": "developer", "content": "You are a brutally honest and mean friend named Dan."},
                 {"role": "user", "content": (
-                    f"Generate a short, brutally honest message in one or two sentences for someone who has missed "
-                    f"their workout goals for {missed_weeks} consecutive week{'s' if missed_weeks != 1 else ''}. "
-                    "Keep it succinct and mean."
+                    f"Pick a random motivational quote about doing what you said you would do and use it to make this person feel bad for not working out this week."
                 )}
             ],
-            temperature=1.5,
+            temperature=1.25,
         )
         message = response.choices[0].message.content.strip()
         print(f"Generated demeaning message: {message}")
@@ -46,7 +53,7 @@ def generate_demeaning_message(missed_weeks: int):
 def get_next_weekly_reset():
     now = datetime.now()
     days_until_sunday = (6 - now.weekday()) % 7
-    next_reset = now.replace(hour=22, minute=59, second=59, microsecond=0) + timedelta(days=days_until_sunday)
+    next_reset = now.replace(hour=23, minute=50, second=59, microsecond=0) + timedelta(days=days_until_sunday)
     if next_reset < now:
         next_reset += timedelta(weeks=1)
     return next_reset
@@ -133,6 +140,47 @@ class WorkoutTracker(commands.Cog):
 
         return consecutive_misses
 
+    def calculate_longest_streak(self, user_id: int) -> int:
+        """
+        Compute the longest historical streak (in weeks) where the user met their weekly goal.
+        """
+        workouts = sorted(self.user_workouts.get(user_id, []))
+        goal = self.get_goal(user_id)
+        if goal <= 0:
+            return 0
+
+        if not workouts:
+            return 0
+
+        # Build a set of week_start datetimes where the user met the goal
+        week_starts = []
+        # Determine overall time range to iterate over weeks
+        first = workouts[0]
+        last = workouts[-1]
+        # Align to week starts (Monday)
+        start_week = first.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=first.weekday())
+        end_week = last.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=last.weekday())
+
+        week = start_week
+        met_weeks = []
+        while week <= end_week:
+            week_end = week + timedelta(days=7)
+            week_count = sum(1 for w in workouts if week <= w < week_end)
+            met_weeks.append(week_count >= goal)
+            week += timedelta(days=7)
+
+        # Scan met_weeks to find the longest run of True
+        longest = 0
+        current = 0
+        for v in met_weeks:
+            if v:
+                current += 1
+                longest = max(longest, current)
+            else:
+                current = 0
+
+        return longest
+
     def save_data(self):
         data = {
             "user_goals": self.user_goals,
@@ -212,21 +260,203 @@ class WorkoutTracker(commands.Cog):
             await interaction.response.send_message("No one has logged any workouts yet! Be the first to start!", ephemeral=True)
             return
 
+        # Compute counts and longest streaks for each tracked user
         total_workouts = {uid: len(self.user_workouts.get(uid, [])) for uid in self.user_goals}
-        leaderboard = sorted(total_workouts.items(), key=lambda x: x[1], reverse=True)
-        msg = "**🏋️ Workout Leaderboard (All-Time) 🏋️**\n\n"
+        longest_streaks = {uid: self.calculate_longest_streak(uid) for uid in self.user_goals}
 
-        for i, (uid, count) in enumerate(leaderboard, start=1):
+        # Sort leaderboards
+        leaderboard_counts = sorted(total_workouts.items(), key=lambda x: x[1], reverse=True)
+        leaderboard_streaks = sorted(longest_streaks.items(), key=lambda x: x[1], reverse=True)
+
+        # Build member mapping and display names
+        member_map = {}
+        display_names = {}
+        for uid, _ in leaderboard_counts:
             member = interaction.guild.get_member(uid) if interaction.guild else None
             if not member:
                 try:
                     member = await self.bot.fetch_user(uid)
                 except:
                     member = None
-            name = member.display_name if member else f"User {uid}"
-            msg += f"{i}. {name}: {count} workouts\n"
+            member_map[uid] = member
+            display_names[uid] = member.display_name if member else f"User {uid}"
 
-        await interaction.response.send_message(msg, ephemeral=False)
+        # Limit to top N for graphing (choose top 10)
+        TOP_N = 10
+        top_counts = [(display_names[uid], count, member_map.get(uid)) for uid, count in leaderboard_counts[:TOP_N]]
+        top_streaks = [(display_names[uid], streak, member_map.get(uid)) for uid, streak in leaderboard_streaks[:TOP_N]]
+
+        # Generate image files
+        counts_path = os.path.join(os.getcwd(), "workout_top_counts.png")
+        streaks_path = os.path.join(os.getcwd(), "workout_top_streaks.png")
+        try:
+            await self.generate_workout_counts_graph(top_counts, counts_path)
+            await self.generate_longest_streaks_graph(top_streaks, streaks_path)
+
+            files = []
+            try:
+                files.append(discord.File(counts_path))
+            except Exception:
+                pass
+            try:
+                files.append(discord.File(streaks_path))
+            except Exception:
+                pass
+
+            if files:
+                await interaction.response.send_message(files=files)
+            else:
+                await interaction.response.send_message("Could not generate leaderboard images.", ephemeral=True)
+        finally:
+            # cleanup
+            try:
+                if os.path.exists(counts_path):
+                    os.remove(counts_path)
+                if os.path.exists(streaks_path):
+                    os.remove(streaks_path)
+            except Exception:
+                pass
+
+    async def generate_workout_counts_graph(self, top_counts, out_path: str):
+        """Generate horizontal bar chart for total workouts.
+
+        top_counts: list of (display_name, count, member)
+        """
+        names = [t[0] for t in top_counts]
+        counts = [t[1] for t in top_counts]
+
+        num = len(names)
+        fig_height = max(3, num * 0.6)
+        fig, ax = plt.subplots(figsize=(10, fig_height))
+        fig.patch.set_facecolor("#2C2F33")
+        ax.set_facecolor("#2C2F33")
+
+        # Fetch avatars and compute avg colors
+        avatars = []
+        bar_colors = []
+        for name, _, member in top_counts:
+            avatar_img = None
+            avg_hex = "#00BFA5"
+            if member:
+                try:
+                    avatar_url = member.avatar.url if getattr(member, 'avatar', None) else member.display_avatar.url
+                except Exception:
+                    avatar_url = None
+                if avatar_url:
+                    try:
+                        async with self.bot.http._HTTPClient__session.get(str(avatar_url)) as resp:
+                            avatar_data = await resp.read()
+                        avatar = Image.open(BytesIO(avatar_data)).convert("RGBA").resize((36, 36))
+                        avatar_array = np.array(avatar)[..., :3]
+                        avg_color = tuple(avatar_array.mean(axis=(0, 1)).astype(int))
+                        avg_hex = f"#{avg_color[0]:02x}{avg_color[1]:02x}{avg_color[2]:02x}"
+                        mask = Image.new("L", avatar.size, 0)
+                        draw = ImageDraw.Draw(mask)
+                        draw.ellipse((0, 0, avatar.size[0], avatar.size[1]), fill=255)
+                        avatar.putalpha(mask)
+                        avatar_img = avatar
+                    except Exception:
+                        avatar_img = None
+
+            avatars.append(avatar_img)
+            bar_colors.append(avg_hex)
+
+        y = np.arange(num)
+        bars = ax.barh(y, counts, color=bar_colors, height=0.6, edgecolor="none")
+
+        ax.set_yticks(y)
+        ax.set_yticklabels(names, color="#FFFFFF", fontsize=12)
+        ax.invert_yaxis()
+        ax.set_xlabel("Workouts", color="#FFFFFF")
+        ax.set_title("Top Workout Totals", color="#FFFFFF", fontsize=16)
+        ax.tick_params(axis="x", colors="#FFFFFF")
+
+        max_count = max(counts) if counts else 1
+        for i, b in enumerate(bars):
+            x = b.get_width()
+            y_pos = b.get_y() + b.get_height() / 2
+            if avatars[i] is not None:
+                avatar_box = OffsetImage(avatars[i], zoom=1)
+                ab = AnnotationBbox(avatar_box, (x + max_count * 0.03, y_pos), frameon=False, xycoords="data", box_alignment=(0.5, 0.5))
+                ax.add_artist(ab)
+                text_x = x + max_count * 0.08
+            else:
+                text_x = x + max_count * 0.02
+            ax.text(text_x, y_pos, str(counts[i]), va="center", color="#FFFFFF", fontsize=12)
+
+        plt.tight_layout()
+        fig.savefig(out_path, dpi=150, bbox_inches='tight')
+        plt.close(fig)
+
+    async def generate_longest_streaks_graph(self, top_streaks, out_path: str):
+        """Generate horizontal bar chart for longest streaks.
+
+        top_streaks: list of (display_name, streak, member)
+        """
+        names = [t[0] for t in top_streaks]
+        streaks = [t[1] for t in top_streaks]
+
+        num = len(names)
+        fig_height = max(3, num * 0.6)
+        fig, ax = plt.subplots(figsize=(10, fig_height))
+        fig.patch.set_facecolor("#2C2F33")
+        ax.set_facecolor("#2C2F33")
+
+        avatars = []
+        bar_colors = []
+        for name, _, member in top_streaks:
+            avatar_img = None
+            avg_hex = "#FFB86C"
+            if member:
+                try:
+                    avatar_url = member.avatar.url if getattr(member, 'avatar', None) else member.display_avatar.url
+                except Exception:
+                    avatar_url = None
+                if avatar_url:
+                    try:
+                        async with self.bot.http._HTTPClient__session.get(str(avatar_url)) as resp:
+                            avatar_data = await resp.read()
+                        avatar = Image.open(BytesIO(avatar_data)).convert("RGBA").resize((36, 36))
+                        avatar_array = np.array(avatar)[..., :3]
+                        avg_color = tuple(avatar_array.mean(axis=(0, 1)).astype(int))
+                        avg_hex = f"#{avg_color[0]:02x}{avg_color[1]:02x}{avg_color[2]:02x}"
+                        mask = Image.new("L", avatar.size, 0)
+                        draw = ImageDraw.Draw(mask)
+                        draw.ellipse((0, 0, avatar.size[0], avatar.size[1]), fill=255)
+                        avatar.putalpha(mask)
+                        avatar_img = avatar
+                    except Exception:
+                        avatar_img = None
+
+            avatars.append(avatar_img)
+            bar_colors.append(avg_hex)
+
+        y = np.arange(num)
+        bars = ax.barh(y, streaks, color=bar_colors, height=0.6, edgecolor="none")
+
+        ax.set_yticks(y)
+        ax.set_yticklabels(names, color="#FFFFFF", fontsize=12)
+        ax.invert_yaxis()
+        ax.set_xlabel("Longest Streak (weeks)", color="#FFFFFF")
+        ax.set_title("Top Longest Workout Streaks", color="#FFFFFF", fontsize=16)
+        ax.tick_params(axis="x", colors="#FFFFFF")
+
+        max_count = max(streaks) if streaks else 1
+        for i, b in enumerate(bars):
+            x = b.get_width()
+            y_pos = b.get_y() + b.get_height() / 2
+            if avatars[i] is not None:
+                avatar_box = OffsetImage(avatars[i], zoom=1)
+                ab = AnnotationBbox(avatar_box, (x + max_count * 0.03, y_pos), frameon=False, xycoords="data", box_alignment=(0.5, 0.5))
+                ax.add_artist(ab)
+                text_x = x + max_count * 0.08
+            else:
+                text_x = x + max_count * 0.02
+            ax.text(text_x, y_pos, str(streaks[i]), va="center", color="#FFFFFF", fontsize=12)
+
+        plt.tight_layout()
+        fig.savefig(out_path, dpi=150, bbox_inches='tight')
+        plt.close(fig)
 
     @app_commands.command(name="my_workouts", description="Check how many workouts you've logged this week.")
     async def my_workouts(self, interaction: discord.Interaction):
@@ -389,8 +619,7 @@ class WorkoutTracker(commands.Cog):
             else:
                 text = (
                     f"**<@{uid}>**: Goal **{g}** - Logged **{c}** ❌\n"
-                    f"You missed **{misses} consecutive week{'s' if misses>1 else ''}**\n> {dm}\n"
-                    "React with 👍 within 1 week to stay in the tracker."
+                    f"You missed **{misses} consecutive week{'s' if misses>1 else ''}**\n> {dm}"
                 )
                 sent = await channel.send(text[:2000])
                 self.pending_reactions[str(uid)] = {

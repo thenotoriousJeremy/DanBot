@@ -27,6 +27,7 @@ class ServerWrapped(commands.Cog):
         self.bot = bot
         self.current_year = datetime.now().year
         self.cache = self.load_cache()
+        self._member_cache = {}
 
     def load_cache(self):
         """
@@ -79,13 +80,13 @@ class ServerWrapped(commands.Cog):
             reaction_counts = cached_data["reaction_counts"]
             active_hours = cached_data["active_hours"]
         else:
-            messages, word_cloud_data, message_counts, word_counts, reaction_counts, active_hours = await self.fetch_historical_data(guild)
-            # Save essential data to cache
+            raw_messages, word_cloud_data, message_counts, word_counts, reaction_counts, active_hours = await self.fetch_historical_data(guild)
+            # Save essential data to cache (use raw dicts)
             self.cache[str(guild.id)] = {
                 "last_scraped": datetime.now().isoformat(),
                 "messages": [
                     {"content": msg["content"], "author_id": msg["author_id"], "id": msg["id"], "channel_id": msg["channel_id"]}
-                    for msg in messages
+                    for msg in raw_messages
                 ],
                 "word_cloud_data": word_cloud_data,
                 "message_counts": message_counts,
@@ -95,6 +96,9 @@ class ServerWrapped(commands.Cog):
             }
 
             self.save_cache()
+
+            # Reconstruct message-like objects for downstream processing
+            messages = [self.reconstruct_message(msg_data, guild) for msg_data in raw_messages]
 
         # Generate Word Cloud
         filtered_word_cloud_data = self.filter_text(word_cloud_data)
@@ -179,6 +183,7 @@ class ServerWrapped(commands.Cog):
             try:
                 print(f"Starting to fetch messages from channel: {channel.name} ({channel.id})")
                 
+                msg_counter = 0
                 async for message in channel.history(after=start_of_year, oldest_first=True, limit=None):
                     if message.author.bot:
                         continue  # Ignore bot messages
@@ -203,8 +208,14 @@ class ServerWrapped(commands.Cog):
                             "channel_id": channel.id,
                             "reaction_count": reaction_counts.get(message.id, {}).get("reaction_count", 0) + reaction.count,
                         }
+                    # Throttle while iterating history to reduce 429s
+                    msg_counter += 1
+                    if msg_counter % 50 == 0:
+                        await asyncio.sleep(0.2)
 
                 print(f"Completed fetching messages from channel: {channel.name} ({channel.id})")
+                # Small pause between channels to avoid bursting the API
+                await asyncio.sleep(0.25)
             except discord.Forbidden:
                 print(f"Cannot access channel: {channel.name} ({channel.id})")
             except discord.HTTPException as e:
@@ -260,7 +271,7 @@ class ServerWrapped(commands.Cog):
             try:
                 # Fetch the channel and message
                 channel = guild.get_channel(channel_id)
-                message = await channel.fetch_message(msg_id)
+                message = await self._safe_fetch_message(channel, msg_id)
                 link = f"https://discord.com/channels/{guild.id}/{channel.id}/{message.id}"
                 message_links.append(f"**[{message.author.display_name}](<{link}>)**: {reaction_count} reactions")
             except Exception as e:
@@ -299,7 +310,7 @@ class ServerWrapped(commands.Cog):
                 if not channel:
                     raise discord.Forbidden
 
-                message = await channel.fetch_message(message_id)
+                message = await self._safe_fetch_message(channel, message_id)
                 link = f"https://discord.com/channels/{guild.id}/{channel.id}/{message.id}"
                 author_name = message.author.display_name
                 message_links.append(f"**[{author_name}](<{link}>)**: {content_length} characters")
@@ -312,6 +323,48 @@ class ServerWrapped(commands.Cog):
                 message_links.append(f"Message ID `{message_id}`: {content_length} characters (Error: {e})")
 
         return "\n".join(message_links)
+
+    async def _safe_fetch_message(self, channel, message_id, retries: int = 5):
+        """Fetch a message with simple exponential backoff to handle 429s.
+
+        Falls back to raising the last exception if retries are exhausted.
+        """
+        delay = 0.5
+        last_exc = None
+        for attempt in range(retries):
+            try:
+                return await channel.fetch_message(message_id)
+            except discord.HTTPException as e:
+                last_exc = e
+                # Simple backoff on any HTTPException (including 429)
+                await asyncio.sleep(delay)
+                delay = min(delay * 2, 10)
+            except Exception as e:
+                # Non-HTTP errors should be re-raised
+                raise
+        # Retries exhausted
+        if last_exc:
+            raise last_exc
+
+    async def _safe_fetch_member(self, guild, member_id, retries: int = 3):
+        """Fetch a member with caching and retries to avoid repeated REST calls."""
+        if member_id in self._member_cache:
+            return self._member_cache[member_id]
+
+        delay = 0.5
+        last_exc = None
+        for attempt in range(retries):
+            try:
+                member = guild.get_member(member_id) or await guild.fetch_member(member_id)
+                if member:
+                    self._member_cache[member_id] = member
+                return member
+            except discord.HTTPException as e:
+                last_exc = e
+                await asyncio.sleep(delay)
+                delay = min(delay * 2, 5)
+        if last_exc:
+            raise last_exc
 
     def generate_word_cloud(self, text):
         """

@@ -24,9 +24,9 @@ async def on_ready():
             # This will fetch and cache all members
             pass
     print(f"Logged in as {bot.user}")
-    #channel = bot.get_channel(1327019216510910546)
-    #if channel:
-    #     await channel.send("https://c.tenor.com/OjplKC2PXmQAAAAC/tenor.gif")  # Bender saying "I'm back, baby!"
+   # channel = bot.get_channel(1327019216510910546)
+   # if channel:
+   #      await channel.send("https://c.tenor.com/OjplKC2PXmQAAAAC/tenor.gif")  # Bender saying "I'm back, baby!"
 
     # Load the BirthdayCog extension
     await bot.load_extension("cogs.birthdays")
@@ -43,6 +43,12 @@ async def on_ready():
     print("Connection Chart cog loaded!")
     await bot.load_extension("cogs.music")
     print("Music cog loaded!")
+    # Load the Wordle Stats extension
+    try:
+        await bot.load_extension("cogs.wordle_stats")
+        print("Wordle Stats cog loaded!")
+    except Exception as e:
+        print(f"Failed to load Wordle Stats cog: {e}")
 
     # Sync slash commands globally
     try:
