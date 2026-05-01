@@ -432,6 +432,7 @@ class BirthdayCog(commands.Cog):
         """
         List all saved birthdays in the database.
         """
+        await interaction.response.defer()
         with self.conn:
             cursor = self.conn.cursor()
             cursor.execute("SELECT username, birthday FROM birthdays ORDER BY birthday")
@@ -441,13 +442,20 @@ class BirthdayCog(commands.Cog):
             birthday_list = "\n".join(
                 [f"🎂 **{username}**: {birthday}" for username, birthday in birthdays]
             )
-            await interaction.response.send_message(
-                f"Here are all the birthdays I know:\n{birthday_list}", ephemeral=False
-            )
+            
+            # Split into chunks if it exceeds Discord's 2000 char limit
+            msg = f"Here are all the birthdays I know:\n{birthday_list}"
+            if len(msg) > 2000:
+                chunks = [msg[i:i+1999] for i in range(0, len(msg), 1999)]
+                for i, chunk in enumerate(chunks):
+                    if i == 0:
+                        await interaction.followup.send(chunk)
+                    else:
+                        await interaction.followup.send(chunk)
+            else:
+                await interaction.followup.send(msg)
         else:
-            await interaction.response.send_message(
-                "I don't have any birthdays saved yet. 😔", ephemeral=False
-            )
+            await interaction.followup.send("I don't have any birthdays saved yet. 😔")
 
 
     @tasks.loop(hours=24)

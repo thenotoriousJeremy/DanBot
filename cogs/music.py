@@ -9,7 +9,7 @@ from discord.ext import commands
 import yt_dlp
 
 BASE_DIR = Path(__file__).resolve().parent.parent
-COOKIE_FILE = Path(os.getenv("YTDLP_COOKIE_FILE", BASE_DIR / "cookies.txt"))
+COOKIE_FILE = Path(os.getenv("YTDLP_COOKIE_FILE", Path(os.getenv("DATA_DIR", BASE_DIR)) / "cookies.txt"))
 FFMPEG_EXECUTABLE = os.getenv("FFMPEG_PATH") or str(BASE_DIR / "ffmpeg.exe") or shutil.which("ffmpeg")
 ytdl_format_options = {
     'format': 'bestaudio/best',
