@@ -244,7 +244,7 @@ class YouTubeMusic(commands.Cog):
         else:
             await interaction.response.send_message("Not connected to a voice channel.", ephemeral=True)
 
-    @app_commands.command(name="music_leave", description="Leaves the current voice channel.")
+    @app_commands.command(name="leave", description="Leaves the current voice channel.")
     async def leave(self, interaction: discord.Interaction):
         vc = interaction.guild.voice_client
         if vc:
