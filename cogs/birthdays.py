@@ -19,7 +19,7 @@ class BirthdayCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.birthday_check_time = "09:00"  # Set the time for the daily check (24-hour format: HH:MM)
-        self.conn = sqlite3.connect('birthdays.db')
+        self.conn = sqlite3.connect(os.path.join(os.getenv("DATA_DIR", "."), 'birthdays.db'))
         self.create_table()
         self.birthday_reminder.start()
 
@@ -136,7 +136,7 @@ class BirthdayCog(commands.Cog):
         try:
             month, day = birthday_str.split("-")
             # lightweight cache in repo
-            cache_path = os.path.join(os.path.dirname(__file__), "..", ".cache_song_search.json")
+            cache_path = os.path.join(os.getenv("DATA_DIR", "."), ".cache_song_search.json")
             try:
                 cache_path = os.path.abspath(cache_path)
                 if os.path.exists(cache_path):

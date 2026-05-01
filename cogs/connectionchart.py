@@ -13,7 +13,7 @@ from matplotlib.font_manager import FontProperties
 import matplotlib.patches as mpatches
 
 class ConnectionChart(commands.Cog):
-    DATA_FILE = "connection_chart.json"  # File to store connection data
+    DATA_FILE = os.path.join(os.getenv("DATA_DIR", "."), "connection_chart.json")  # File to store connection data
 
     def __init__(self, bot):
         self.bot = bot

@@ -14,7 +14,9 @@ from discord import app_commands
 
 WORDLE_PATTERN = re.compile(r"Your group is on \d+ day streak|Here are yesterday's results|[1-6X]/6:|👑", re.IGNORECASE)
 # Fixed channel id as requested
-CHANNEL_ID = 708795613575249941
+import os
+
+CHANNEL_ID = int(os.getenv("WORDLE_CHANNEL_ID", 708795613575249941))
 
 
 class WordleStats(commands.Cog):
@@ -317,7 +319,7 @@ class WordleStats(commands.Cog):
             ax.text(text_x, y_pos, str(counts[i]), va="center", color="#FFFFFF", fontsize=12)
 
         plt.tight_layout()
-        out_path = "wordle_top_completions.png"
+        out_path = os.path.join(os.getenv("DATA_DIR", "."), "wordle_top_completions.png")
         plt.savefig(out_path, bbox_inches="tight", facecolor=fig.get_facecolor())
         plt.close()
         return out_path
@@ -333,8 +335,39 @@ class WordleStats(commands.Cog):
         fig.patch.set_facecolor("#2C2F33")
         ax.set_facecolor("#2C2F33")
 
+        # Fetch avatars and compute average colors for bar coloring
+        avatars = []
+        bar_colors = []
+        for name in names:
+            member = player_member_map.get(name)
+            avatar_img = None
+            avg_hex = "#FFB74D"  # default streak color
+            if member:
+                try:
+                    avatar_url = member.avatar.url if getattr(member, 'avatar', None) else member.display_avatar.url
+                except Exception:
+                    avatar_url = None
+                if avatar_url:
+                    try:
+                        async with self.bot.http._HTTPClient__session.get(str(avatar_url)) as resp:
+                            avatar_data = await resp.read()
+                        avatar = Image.open(BytesIO(avatar_data)).convert("RGBA").resize((36, 36))
+                        avatar_array = np.array(avatar)[..., :3]
+                        avg_color = tuple(avatar_array.mean(axis=(0, 1)).astype(int))
+                        avg_hex = f"#{avg_color[0]:02x}{avg_color[1]:02x}{avg_color[2]:02x}"
+                        mask = Image.new("L", avatar.size, 0)
+                        draw = ImageDraw.Draw(mask)
+                        draw.ellipse((0, 0, avatar.size[0], avatar.size[1]), fill=255)
+                        avatar.putalpha(mask)
+                        avatar_img = avatar
+                    except Exception:
+                        avatar_img = None
+
+            avatars.append(avatar_img)
+            bar_colors.append(avg_hex)
+
         y = np.arange(num)
-        bars = ax.barh(y, counts, color="#FFB74D", height=0.6, edgecolor="none")
+        bars = ax.barh(y, counts, color=bar_colors, height=0.6, edgecolor="none")
 
         ax.set_yticks(y)
         ax.set_yticklabels(names, color="#FFFFFF", fontsize=12)
@@ -344,33 +377,6 @@ class WordleStats(commands.Cog):
         ax.tick_params(axis="x", colors="#FFFFFF")
 
         max_count = max(counts) if counts else 1
-
-        # Fetch avatars similar to completions chart
-        avatars = []
-        for name in names:
-            member = player_member_map.get(name)
-            if member:
-                try:
-                    avatar_url = member.avatar.url if getattr(member, 'avatar', None) else member.display_avatar.url
-                except Exception:
-                    avatar_url = None
-            else:
-                avatar_url = None
-
-            if avatar_url:
-                try:
-                    async with self.bot.http._HTTPClient__session.get(str(avatar_url)) as resp:
-                        avatar_data = await resp.read()
-                    avatar = Image.open(BytesIO(avatar_data)).convert("RGBA").resize((36, 36))
-                    mask = Image.new("L", avatar.size, 0)
-                    draw = ImageDraw.Draw(mask)
-                    draw.ellipse((0, 0, avatar.size[0], avatar.size[1]), fill=255)
-                    avatar.putalpha(mask)
-                    avatars.append(avatar)
-                except Exception:
-                    avatars.append(None)
-            else:
-                avatars.append(None)
 
         for i, b in enumerate(bars):
             x = b.get_width()
@@ -387,7 +393,7 @@ class WordleStats(commands.Cog):
             ax.text(text_x, y_pos, str(counts[i]), va="center", color="#FFFFFF", fontsize=12)
 
         plt.tight_layout()
-        out_path = "wordle_top_streaks.png"
+        out_path = os.path.join(os.getenv("DATA_DIR", "."), "wordle_top_streaks.png")
         plt.savefig(out_path, bbox_inches="tight", facecolor=fig.get_facecolor())
         plt.close()
         return out_path

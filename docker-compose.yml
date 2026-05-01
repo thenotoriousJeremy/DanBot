@@ -1,0 +1,20 @@
+version: '3.8'
+
+services:
+  danbot:
+    image: ghcr.io/thenotoriousjeremy/danbot:latest
+    container_name: danbot
+    environment:
+      # Required Variables
+      - DISCORD_TOKEN=your_bot_token
+      
+      # Optional Variables
+      # - OPENAI_TOKEN=your_openai_token
+      # - WORKOUT_CHANNEL_ID=1327019216510910546
+      # - WORDLE_CHANNEL_ID=708795613575249941
+      
+      # Data Directory Configuration
+      - DATA_DIR=/app/data
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped

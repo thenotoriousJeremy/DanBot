@@ -1,4 +1,6 @@
-discord.py
+discord.py==2.7.1
+PyNaCl
+davey
 python-dotenv
 requests
 Pillow
@@ -8,4 +10,3 @@ wordcloud
 yt-dlp
 pytz
 openai
-fish-audio-sdk

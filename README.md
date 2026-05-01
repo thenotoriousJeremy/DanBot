@@ -25,11 +25,6 @@ DanBot is a modular Discord bot designed to provide a variety of features, inclu
 - **Leaderboard**: Displays the leaderboard of users based on workouts logged.
 - **Weekly Reset with Demeaning Messages**: At the weekly reset, the bot sends demeaning messages to users who didn’t meet their goal. If a user misses their goal for too many consecutive weeks, they must react with 👍 within one week to remain in the tracker. (Workouts are kept even if tracking stops.)
 
-### **Fish Speech**
-- **Text-to-Speech (TTS)**: Generates TTS audio from input text using the Fish Speech API.
-- **Voice Channel Integration**: Plays the generated audio in a Discord voice channel.
-- **Dynamic Commands**: Commands like `/say` to generate and play TTS and `/leave` to disconnect from the voice channel.
-
 ### **Music**
 - **YouTube Music Playback**: Play music directly from YouTube using modern, reliable methods.
 - **Queue System**: If a song is already playing, new tracks are added to the queue.
@@ -68,8 +63,9 @@ DanBot is a modular Discord bot designed to provide a variety of features, inclu
 
      ```env
      DISCORD_TOKEN=your_bot_token
-     FISH_TOKEN=your_fish_token (optional)
      OPENAI_TOKEN=your_openai_token (optional)
+     WORDLE_CHANNEL_ID=your_wordle_channel_id (optional)
+     WORKOUT_CHANNEL_ID=your_workout_channel_id (optional)
      ```
 
 4. **Run the Bot**  
@@ -78,6 +74,64 @@ DanBot is a modular Discord bot designed to provide a variety of features, inclu
    ```bash
    python bot.py
    ```
+
+### Docker
+
+DanBot is container-ready and can be launched by passing only environment variables.
+
+**Note for Voice Features**: Music functionality requires outbound UDP connections (ports 50000-65535) for Discord voice. Ensure your Docker network configuration allows UDP traffic.
+
+Build the container:
+
+```bash
+docker build -t danbot .
+```
+
+Run the container with your token:
+
+```bash
+docker run -d \
+  --name danbot \
+  -e DISCORD_TOKEN=your_bot_token \
+  -e DATA_DIR=/app/data \
+  -v $(pwd)/data:/app/data \
+  danbot
+```
+
+If you want persistent storage for generated files or local config, mount the repo directory or specific files into `/app`.
+
+### Docker Compose
+
+Alternatively, you can use Docker Compose to run DanBot. The project includes a `docker-compose.yml` file that will automatically build the container and use your `.env` file for configuration.
+
+```yaml
+version: '3.8'
+
+services:
+  danbot:
+    image: ghcr.io/thenotoriousjeremy/danbot:latest
+    container_name: danbot
+    environment:
+      # Required Variables
+      - DISCORD_TOKEN=your_bot_token
+      
+      # Optional Variables
+      # - OPENAI_TOKEN=your_openai_token
+      # - WORKOUT_CHANNEL_ID=1327019216510910546
+      # - WORDLE_CHANNEL_ID=708795613575249941
+      
+      # Data Directory Configuration
+      - DATA_DIR=/app/data
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped
+```
+
+To start the bot using Docker Compose, run:
+
+```bash
+docker-compose up -d
+```
 
 ## Commands
 
@@ -95,10 +149,6 @@ DanBot is a modular Discord bot designed to provide a variety of features, inclu
 - `/leaderboard`: View the all-time workout leaderboard.
 - `/my_workouts`: Check how many workouts you've logged this week.
 
-### **Fish Speech**
-- `/say`: Generate TTS from text and play it in the voice channel.
-- `/leave`: Make the bot leave the voice channel.
-
 ### **Music**
 - `/join`: Bot joins your current voice channel.
 - `/play <query>`: Plays a YouTube URL or search query. If a song is already playing, it is added to the queue.
@@ -115,10 +165,10 @@ DanBot is a modular Discord bot designed to provide a variety of features, inclu
 ## Configuration
 
 - **Cache Expiry (Server Wrapped)**: Modify `CACHE_EXPIRY` in `ServerWrapped` for server data caching duration.
-- **Workout Tracker Thread**: Replace `SPECIFIC_THREAD_ID` in `WorkoutTracker` with your specific thread ID.
-- **TTS Configuration**: Ensure `FISH_TOKEN` and `MODEL_ID` are correctly set in the `.env` file if using TTS.
-- **FFmpeg Setup (Music)**: Place `ffmpeg.exe` in your main folder or update the path in the Music cog if needed.
-- **Authentication for Age-Restricted YouTube Videos (Music)**: Export your YouTube cookies (using an extension like cookies.txt) and update the `yt-dlp` options if necessary.
+- **Workout Tracker Thread**: Set `WORKOUT_CHANNEL_ID` in `.env` or in the container environment.
+- **Wordle Channel**: Set `WORDLE_CHANNEL_ID` in `.env` or in the container environment.
+- **FFmpeg Setup (Music)**: The music cog will use `FFMPEG_PATH` if set, otherwise it falls back to any `ffmpeg` binary on PATH or the local `ffmpeg.exe` file.
+- **Authentication for Age-Restricted YouTube Videos (Music)**: Set `YTDLP_COOKIE_FILE` in `.env` if you need a cookies file.
 
 ## How to Use
 
@@ -133,14 +183,13 @@ DanBot is a modular Discord bot designed to provide a variety of features, inclu
      - **Send Messages**
      - **Attach Files**
      - **Embed Links**
-     - **Connect and Speak** (for TTS and Music features).
+     - **Connect and Speak** (for Music features).
 
 3. **Use Commands**
    - Type `/` in any server channel to view all available slash commands.
    - Example usage:
      - `/server_wrapped`: View the server's yearly activity report.
      - `/set_birthday 12-25`: Set your birthday to December 25th.
-     - `/say Hello everyone!`: Generate TTS audio and play it in a voice channel.
      - `/join` & `/play`: Use music commands to play YouTube music.
      - `/addconnection` & `/connectionchart`: Manage and view your connection network.
 
@@ -153,7 +202,7 @@ DanBot is a modular Discord bot designed to provide a variety of features, inclu
    - Set your birthday with `/set_birthday` to receive special mentions on your day!
 
 6. **Enjoy Interactive Features**
-   - Generate TTS audio and fun visuals with commands like `/say` and `/server_wrapped`.
+   - Enjoy fun visuals with commands like `/server_wrapped` or listen to music using `/play`.
 
 ### **For Server Admins**
 - Ensure DanBot has access to the necessary channels.

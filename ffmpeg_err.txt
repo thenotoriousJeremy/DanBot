@@ -1,0 +1,28 @@
+ffmpeg version 2025-03-31-git-35c091f4b7-essentials_build-www.gyan.dev Copyright (c) 2000-2025 the FFmpeg developers
+  built with gcc 14.2.0 (Rev1, Built by MSYS2 project)
+  configuration: --enable-gpl --enable-version3 --enable-static --disable-w32threads --disable-autodetect --enable-fontconfig --enable-iconv --enable-gnutls --enable-libxml2 --enable-gmp --enable-bzlib --enable-lzma --enable-zlib --enable-libsrt --enable-libssh --enable-libzmq --enable-avisynth --enable-sdl2 --enable-libwebp --enable-libx264 --enable-libx265 --enable-libxvid --enable-libaom --enable-libopenjpeg --enable-libvpx --enable-mediafoundation --enable-libass --enable-libfreetype --enable-libfribidi --enable-libharfbuzz --enable-libvidstab --enable-libvmaf --enable-libzimg --enable-amf --enable-cuda-llvm --enable-cuvid --enable-dxva2 --enable-d3d11va --enable-d3d12va --enable-ffnvcodec --enable-libvpl --enable-nvdec --enable-nvenc --enable-vaapi --enable-libgme --enable-libopenmpt --enable-libopencore-amrwb --enable-libmp3lame --enable-libtheora --enable-libvo-amrwbenc --enable-libgsm --enable-libopencore-amrnb --enable-libopus --enable-libspeex --enable-libvorbis --enable-librubberband
+  libavutil      60.  0.100 / 60.  0.100
+  libavcodec     62.  0.100 / 62.  0.100
+  libavformat    62.  0.100 / 62.  0.100
+  libavdevice    62.  0.100 / 62.  0.100
+  libavfilter    11.  0.100 / 11.  0.100
+  libswscale      9.  0.100 /  9.  0.100
+  libswresample   6.  0.100 /  6.  0.100
+  libpostproc    59.  0.100 / 59.  0.100
+Input #0, matroska,webm, from 'https://rr4---sn-bvvbaxivnuxqjvhj5nu-p5qe.googlevideo.com/videoplayback?expire=1777675840&ei=4Nn0advyKYWXr9gP_K6lmQY&ip=98.204.5.17&id=o-AD2mWLX-wZj5i4ye6kDnKtj9Rbiw_ZhM8Ec18NLT0opZ&itag=251&source=youtube&requiressl=yes&xpc=EgVo2aDSNQ%3D%3D&met=1777654240%2C&mh=7c&mm=31%2C29&mn=sn-bvvbaxivnuxqjvhj5nu-p5qe%2Csn-p5qlsnrl&ms=au%2Crdu&mv=m&mvi=4&pl=21&rms=au%2Cau&initcwndbps=3688750&bui=AbKmrwrUc_1JNN7TmzZ3UkDoxq3oeVix9Edq0d5l33GTbCDmbDxe_nuFZo25YkxJEkMdtICI3HeRHIjr&spc=96Xrv8SaKKSYK4HW6aUir3LSCvUAhDBhuSBgC9BNyBlhTC_h1w&vprv=1&svpuc=1&mime=audio%2Fwebm&rqh=1&gir=yes&clen=3433755&dur=213.061&lmt=1766955883819090&mt=1777653902&fvip=3&keepalive=yes&fexp=51565115%2C51565682&c=ANDROID_VR&txp=5532534&sparams=expire%2Cei%2Cip%2Cid%2Citag%2Csource%2Crequiressl%2Cxpc%2Cbui%2Cspc%2Cvprv%2Csvpuc%2Cmime%2Crqh%2Cgir%2Cclen%2Cdur%2Clmt&sig=AHEqNM4wRQIgMDp1rOtWTCge5TwVGXMNNiQM-cnsf_BX6pJCrInSwisCIQC3kdcEMbQ7_2R5VubOYnl9xul5Vx4PDytG5lCckz2plQ%3D%3D&lsparams=met%2Cmh%2Cmm%2Cmn%2Cms%2Cmv%2Cmvi%2Cpl%2Crms%2Cinitcwndbps&lsig=APaTxxMwRQIgVsXcHF0fAfKoqJIRb7Am5KXnrU2-kM6VIUpl_hpj1f0CIQDpWI-xZgk3eXmK6mzutcINA-X6Jn01NjCHqe1imPryKw%3D%3D':
+  Metadata:
+    encoder         : google/video-file
+  Duration: 00:03:33.06, start: -0.007000, bitrate: 128 kb/s
+  Stream #0:0(eng): Audio: opus, 48000 Hz, stereo, fltp (default)
+Stream mapping:
+  Stream #0:0 -> #0:0 (opus (native) -> pcm_s16le (native))
+Press [q] to stop, [?] for help
+Output #0, null, to 'pipe:':
+  Metadata:
+    encoder         : Lavf62.0.100
+  Stream #0:0(eng): Audio: pcm_s16le, 48000 Hz, stereo, s16, 1536 kb/s (default)
+    Metadata:
+      encoder         : Lavc62.0.100 pcm_s16le
+[opus @ 000001abf1f04ec0] Error parsing Opus packet header.
+[out#0/null @ 000001abf1e68100] video:0KiB audio:39946KiB subtitle:0KiB other streams:0KiB global headers:0KiB muxing overhead: unknown
+size=N/A time=00:03:33.05 bitrate=N/A speed= 127x    

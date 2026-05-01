@@ -59,8 +59,8 @@ def get_next_weekly_reset():
     return next_reset
 
 class WorkoutTracker(commands.Cog):
-    STORAGE_FILE = "workout_data.json"
-    SPECIFIC_THREAD_ID = 1327019216510910546  # Replace with your thread ID
+    STORAGE_FILE = os.path.join(os.getenv("DATA_DIR", "."), "workout_data.json")
+    DEFAULT_CHANNEL_ID = int(os.getenv("WORKOUT_CHANNEL_ID", 1327019216510910546))  # Replace with your thread/channel ID
 
     def __init__(self, bot):
         self.bot = bot
@@ -71,7 +71,14 @@ class WorkoutTracker(commands.Cog):
         # pending_reactions maps user_id (as str) to {"message_id": int, "timestamp": isoformat str}
         self.pending_reactions = {}
         self.warning_threshold = 12 * 60 * 60  # 6 hours before reset
-        self.leaderboard_channel = 1327019216510910546
+        # Single env var to configure both the workout thread and leaderboard channel
+        channel_env = os.getenv("WORKOUT_CHANNEL_ID")
+        try:
+            channel_id = int(channel_env) if channel_env else self.DEFAULT_CHANNEL_ID
+        except Exception:
+            channel_id = self.DEFAULT_CHANNEL_ID
+        self.SPECIFIC_THREAD_ID = channel_id
+        self.leaderboard_channel = channel_id
         self.weekly_reset_time = get_next_weekly_reset()
         self.miss_threshold = 2  # Consecutive missed weeks before requiring reaction
         self.load_data()
@@ -107,7 +114,7 @@ class WorkoutTracker(commands.Cog):
             week_start = current_week_start - timedelta(days=7)
 
         # Check previous weeks
-        while True:
+        for _ in range(52):
             week_end = week_start + timedelta(days=7)
             week_count = sum(1 for w in workouts if week_start <= w < week_end)
             if week_count >= goal:
@@ -129,7 +136,7 @@ class WorkoutTracker(commands.Cog):
         consecutive_misses = 0
         week_start = current_week_start - timedelta(days=7)
 
-        while True:
+        for _ in range(52):
             week_end = week_start + timedelta(days=7)
             week_count = sum(1 for w in workouts if week_start <= w < week_end)
             if week_count < goal:
@@ -287,8 +294,8 @@ class WorkoutTracker(commands.Cog):
         top_streaks = [(display_names[uid], streak, member_map.get(uid)) for uid, streak in leaderboard_streaks[:TOP_N]]
 
         # Generate image files
-        counts_path = os.path.join(os.getcwd(), "workout_top_counts.png")
-        streaks_path = os.path.join(os.getcwd(), "workout_top_streaks.png")
+        counts_path = os.path.join(os.getenv("DATA_DIR", "."), "workout_top_counts.png")
+        streaks_path = os.path.join(os.getenv("DATA_DIR", "."), "workout_top_streaks.png")
         try:
             await self.generate_workout_counts_graph(top_counts, counts_path)
             await self.generate_longest_streaks_graph(top_streaks, streaks_path)
@@ -474,6 +481,12 @@ class WorkoutTracker(commands.Cog):
             ephemeral=True
         )
 
+    @app_commands.command(name="test_weekly_reset", description="Test the weekly reset messages (admin only).")
+    @app_commands.checks.has_permissions(administrator=True)
+    async def test_weekly_reset(self, interaction: discord.Interaction):
+        await interaction.response.send_message("Testing weekly reset...", ephemeral=True)
+        await self.reset_weekly_goals()
+
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
         if message.author.bot:
@@ -562,8 +575,12 @@ class WorkoutTracker(commands.Cog):
         print("Running reset_weekly_goals...")
         channel = self.bot.get_channel(self.leaderboard_channel)
         if not channel:
-            print(f"Leaderboard channel {self.leaderboard_channel} not found!")
-            return
+            try:
+                # Try fetching from the API if it's not in cache
+                channel = await self.bot.fetch_channel(self.leaderboard_channel)
+            except Exception as e:
+                print(f"Leaderboard channel {self.leaderboard_channel} not found via cache or API: {e}")
+                return
 
         start_of_week = datetime.now().replace(hour=0,minute=0,second=0,microsecond=0) - timedelta(days=datetime.now().weekday())
         met, missed = [], []

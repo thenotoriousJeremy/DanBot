@@ -19,7 +19,7 @@ import matplotlib.colors as mcolors
 from matplotlib.collections import LineCollection
 
 class ServerWrapped(commands.Cog):
-    CACHE_FILE = "server_wrapped_cache.json"
+    CACHE_FILE = os.path.join(os.getenv("DATA_DIR", "."), "server_wrapped_cache.json")
     CACHE_EXPIRY = timedelta(hours=24)  # Cache data for 24 hours
     EST = pytz.timezone("America/New_York")  # Timezone for Eastern Standard Time
 
@@ -377,7 +377,7 @@ class ServerWrapped(commands.Cog):
             colormap="Set3"
         ).generate(text)
 
-        wordcloud_path = "wordcloud.png"
+        wordcloud_path = os.path.join(os.getenv("DATA_DIR", "."), "wordcloud.png")
         wordcloud.to_file(wordcloud_path)
 
         return wordcloud_path
@@ -426,7 +426,7 @@ class ServerWrapped(commands.Cog):
         plt.tight_layout()
 
         # Save the graph
-        heatmap_path = "activity_heatmap.png"
+        heatmap_path = os.path.join(os.getenv("DATA_DIR", "."), "activity_heatmap.png")
         plt.savefig(heatmap_path, transparent=False, facecolor=fig.get_facecolor())
         plt.close()
 
@@ -518,7 +518,7 @@ class ServerWrapped(commands.Cog):
         ax.set_ylim(-0.5, num_users - 0.5)  # Adjust for clarity
 
         # Save the graph
-        graph_path = "message_count_graph.png"
+        graph_path = os.path.join(os.getenv("DATA_DIR", "."), "message_count_graph.png")
         plt.savefig(graph_path, bbox_inches="tight", transparent=False, facecolor=fig.get_facecolor())
         plt.close()
 
@@ -611,7 +611,7 @@ class ServerWrapped(commands.Cog):
         ax.set_ylim(-0.5, num_users - 0.5)  # Adjust for clarity
 
         # Save the graph
-        graph_path = "word_count_graph.png"
+        graph_path = os.path.join(os.getenv("DATA_DIR", "."), "word_count_graph.png")
         plt.savefig(graph_path, bbox_inches="tight", transparent=False, facecolor=fig.get_facecolor())
         plt.close()
 
