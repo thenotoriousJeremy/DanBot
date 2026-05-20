@@ -12,6 +12,8 @@ if not TOKEN:
         "Missing Discord token. Set DISCORD_TOKEN or BOT_TOKEN in the environment."
     )
 
+from database import DatabaseManager
+
 COMMAND_PREFIX = os.getenv("COMMAND_PREFIX", "!")
 ENABLED_COGS = os.getenv("ENABLED_COGS")
 
@@ -23,6 +25,10 @@ intents.message_content = True
 
 class DanBot(commands.Bot):
     async def setup_hook(self):
+        # Initialize the database & run schema migrations
+        await DatabaseManager.initialize()
+        await DatabaseManager.run_migrations()
+
         await self.load_cogs()
         await self.tree.sync()
         for command in self.tree.get_commands():

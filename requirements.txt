@@ -9,5 +9,6 @@ networkx
 wordcloud
 yt-dlp
 pytz
-openai
 scipy
+aiosqlite
+aiohttp

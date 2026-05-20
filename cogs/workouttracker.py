@@ -3,14 +3,13 @@ from discord.ext import commands, tasks
 from discord import app_commands
 from datetime import datetime, timedelta
 import asyncio
+import aiohttp
 from collections import defaultdict
 import json
 import os
-from openai import OpenAI
-from dotenv import load_dotenv
 from io import BytesIO
 
-# plotting/image libs
+# Plotting libs
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
@@ -18,37 +17,46 @@ import numpy as np
 from PIL import Image, ImageDraw
 from matplotlib.offsetbox import OffsetImage, AnnotationBbox
 
-# Load environment variables
-load_dotenv()
-OPENAI_TOKEN = os.getenv("OPENAI_TOKEN")
+from database import DatabaseManager
 
-if OPENAI_TOKEN:
-    client = OpenAI(api_key=OPENAI_TOKEN)
+# Local Insult & Motivation Engine (Zero-dependency Dan persona)
+DAN_INSULTS = [
+    "Did you set a goal just to prove you are a serial quitter? Get moving.",
+    "I've seen glaciers move faster than you. Go sweat off that laziness.",
+    "Are your muscles made of cotton candy? Because you're melting under a simple goal.",
+    "Excuses build monuments of nothingness. You are currently the chief architect.",
+    "You said you'd do it. Was that before or after you decided to take a nap on the couch?",
+    "If slacking off burned calories, you'd be a fitness model by now.",
+    "The only workout you did this week was scrolling through your phone. Put it down and train.",
+    "Lifting a donut to your mouth does not count as a bicep curl. Go lift some iron.",
+    "Your workout tracker is looking as blank as your motivation. Get it together.",
+    "Even my grandmother can press more than your weekly motivation. Lift the heavy circle.",
+    "You missed your goal again. Are you proud of being this consistent at failing?",
+    "Stop talking about it. Stop posting about it. Just go sweat.",
+    "Weakness is a choice. And boy, are you making that choice loudly and clearly.",
+    "The gym misses you. Or actually, it doesn't, because it prefers people who actually lift.",
+    "Is that couch really that comfortable? Or are you just afraid of a little sweat?",
+    "Congratulations on meeting 0% of your potential this week. A stellar achievement.",
+    "My processor calculates a 100% chance that you are currently slacking off. Move.",
+    "You had one job: do what you said you would do. Instead, you did nothing. Classic."
+]
 
-def generate_demeaning_message(missed_weeks: int):
-    """
-    Generate a short, brutally honest message in one or two sentences for someone
-    who has missed their workout goals for the given number of consecutive weeks.
-    """
-    if not OPENAI_TOKEN:
-        return f"Missed your workouts for {missed_weeks} consecutive weeks. Get it together."
-    try:
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
-                {"role": "developer", "content": "You are a brutally honest and mean friend named Dan."},
-                {"role": "user", "content": (
-                    f"Pick a random motivational quote about doing what you said you would do and use it to make this person feel bad for not working out this week."
-                )}
-            ],
-            temperature=1.25,
-        )
-        message = response.choices[0].message.content.strip()
-        print(f"Generated demeaning message: {message}")
-        return message
-    except Exception as e:
-        print(f"Error generating message: {e}")
-        return f"Missed your workouts for {missed_weeks} consecutive weeks. Get it together."
+DAN_DM_RESPONSES = [
+    "Why are you messaging me? Go lift some weights instead.",
+    "Did you write this from the couch? Because it sounds like lazy talking.",
+    "I'm a bot and even I have a higher active rate than you. Go train.",
+    "Don't cry to me about how hard it is. Go put in the work.",
+    "Your excuses are boring. The weights aren't going to lift themselves.",
+    "You want sympathy? Look it up in the dictionary between 'slacker' and 'weakling'.",
+    "Stop texting me. Go sweat.",
+    "If you spent half as much energy lifting as you did talking, you'd be a champion."
+]
+
+def get_demeaning_message() -> str:
+    """Select and return a random demeaning motivation message from the local engine."""
+    return random.choice(DAN_INSULTS)
+
+import random
 
 def get_next_weekly_reset():
     now = datetime.now()
@@ -58,20 +66,50 @@ def get_next_weekly_reset():
         next_reset += timedelta(weeks=1)
     return next_reset
 
+
+class AcknowledgeWorkoutButton(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None) # Completely persistent across bot restarts
+
+    @discord.ui.button(label="Acknowledge & Stay in Tracker", style=discord.ui.ButtonStyle.green, custom_id="ack_workout_btn")
+    async def acknowledge(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # Determine who this warning is actually for from the SQLite database
+        async with await DatabaseManager.get_connection() as conn:
+            async with conn.execute(
+                "SELECT user_id FROM pending_workout_warnings WHERE message_id = ?;",
+                (interaction.message.id,)
+            ) as cursor:
+                row = await cursor.fetchone()
+
+        if not row:
+            await interaction.response.send_message("This warning is no longer active or already acknowledged.", ephemeral=True)
+            return
+
+        warned_user_id = row[0]
+
+        if interaction.user.id != warned_user_id:
+            await interaction.response.send_message("This warning isn't for you! Go back to lifting! 😠", ephemeral=True)
+            return
+
+        # Delete pending warning in SQLite
+        async with await DatabaseManager.get_connection() as conn:
+            await conn.execute("DELETE FROM pending_workout_warnings WHERE user_id = ?;", (warned_user_id,))
+            await conn.commit()
+
+        # Update warning message to confirm they stay
+        await interaction.response.edit_message(
+            content=f"🟢 **{interaction.user.mention} has acknowledged their warning and remains in the tracker!** Don't slack off this week! 💪",
+            view=None
+        )
+
+
 class WorkoutTracker(commands.Cog):
-    STORAGE_FILE = os.path.join(os.getenv("DATA_DIR", "."), "workout_data.json")
-    DEFAULT_CHANNEL_ID = int(os.getenv("WORKOUT_CHANNEL_ID", 1327019216510910546))  # Replace with your thread/channel ID
+    DEFAULT_CHANNEL_ID = int(os.getenv("WORKOUT_CHANNEL_ID", 1327019216510910546))
 
     def __init__(self, bot):
         self.bot = bot
-        # user_goals maps user_id (int) to an integer representing the weekly goal.
-        self.user_goals = {}
-        # user_workouts maps user_id to a list of datetime objects.
-        self.user_workouts = defaultdict(list)
-        # pending_reactions maps user_id (as str) to {"message_id": int, "timestamp": isoformat str}
-        self.pending_reactions = {}
-        self.warning_threshold = 12 * 60 * 60  # 6 hours before reset
-        # Single env var to configure both the workout thread and leaderboard channel
+        self.warning_threshold = 12 * 60 * 60  # 12 hours before reset
+        
         channel_env = os.getenv("WORKOUT_CHANNEL_ID")
         try:
             channel_id = int(channel_env) if channel_env else self.DEFAULT_CHANNEL_ID
@@ -81,31 +119,38 @@ class WorkoutTracker(commands.Cog):
         self.leaderboard_channel = channel_id
         self.weekly_reset_time = get_next_weekly_reset()
         self.miss_threshold = 2  # Consecutive missed weeks before requiring reaction
-        self.load_data()
+        
+        # Register the persistent Warning button view
+        self.bot.add_view(AcknowledgeWorkoutButton())
+        
         bot.loop.create_task(self.schedule_weekly_reset())
-        print(f"Weekly reset scheduled for: {self.weekly_reset_time}")
+        print(f"[WorkoutTracker] Weekly reset scheduled for: {self.weekly_reset_time}")
 
-    def get_goal(self, user_id: int) -> int:
-        """Return the workout goal for a user as an integer."""
-        goal = self.user_goals.get(user_id, 0)
-        # In case we ever still had a list, take first element
-        if isinstance(goal, list):
-            return goal[0]
-        return goal
+    async def get_goal(self, user_id: int) -> int:
+        """Return the workout goal for a user asynchronously from SQLite."""
+        async with await DatabaseManager.get_connection() as conn:
+            async with conn.execute("SELECT goal FROM workout_goals WHERE user_id = ?;", (user_id,)) as cursor:
+                row = await cursor.fetchone()
+                return row[0] if row else 0
 
-    def calculate_streak(self, user_id: int) -> int:
-        workouts = sorted(self.user_workouts.get(user_id, []))
-        goal = self.get_goal(user_id)
+    async def get_workouts(self, user_id: int) -> list:
+        """Return a user's workout list of datetimes asynchronously from SQLite."""
+        async with await DatabaseManager.get_connection() as conn:
+            async with conn.execute("SELECT timestamp FROM workout_history WHERE user_id = ?;", (user_id,)) as cursor:
+                rows = await cursor.fetchall()
+                return [datetime.fromisoformat(r[0]) for r in rows]
+
+    async def calculate_streak(self, user_id: int) -> int:
+        workouts = sorted(await self.get_workouts(user_id))
+        goal = await self.get_goal(user_id)
         if goal <= 0:
             return 0
 
         now = datetime.now()
-        # Determine current week boundaries
         current_week_start = now.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=now.weekday())
         current_week_end = current_week_start + timedelta(days=7)
 
         streak = 0
-        # Check this week
         current_week_count = sum(1 for w in workouts if current_week_start <= w < current_week_end)
         if current_week_count >= goal:
             streak += 1
@@ -113,7 +158,6 @@ class WorkoutTracker(commands.Cog):
         else:
             week_start = current_week_start - timedelta(days=7)
 
-        # Check previous weeks
         for _ in range(52):
             week_end = week_start + timedelta(days=7)
             week_count = sum(1 for w in workouts if week_start <= w < week_end)
@@ -125,9 +169,9 @@ class WorkoutTracker(commands.Cog):
 
         return streak
 
-    def calculate_consecutive_misses(self, user_id: int) -> int:
-        workouts = sorted(self.user_workouts.get(user_id, []))
-        goal = self.get_goal(user_id)
+    async def calculate_consecutive_misses(self, user_id: int) -> int:
+        workouts = sorted(await self.get_workouts(user_id))
+        goal = await self.get_goal(user_id)
         if goal <= 0:
             return 0
 
@@ -147,24 +191,14 @@ class WorkoutTracker(commands.Cog):
 
         return consecutive_misses
 
-    def calculate_longest_streak(self, user_id: int) -> int:
-        """
-        Compute the longest historical streak (in weeks) where the user met their weekly goal.
-        """
-        workouts = sorted(self.user_workouts.get(user_id, []))
-        goal = self.get_goal(user_id)
-        if goal <= 0:
+    async def calculate_longest_streak(self, user_id: int) -> int:
+        workouts = sorted(await self.get_workouts(user_id))
+        goal = await self.get_goal(user_id)
+        if goal <= 0 or not workouts:
             return 0
 
-        if not workouts:
-            return 0
-
-        # Build a set of week_start datetimes where the user met the goal
-        week_starts = []
-        # Determine overall time range to iterate over weeks
         first = workouts[0]
         last = workouts[-1]
-        # Align to week starts (Monday)
         start_week = first.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=first.weekday())
         end_week = last.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=last.weekday())
 
@@ -176,7 +210,6 @@ class WorkoutTracker(commands.Cog):
             met_weeks.append(week_count >= goal)
             week += timedelta(days=7)
 
-        # Scan met_weeks to find the longest run of True
         longest = 0
         current = 0
         for v in met_weeks:
@@ -188,48 +221,15 @@ class WorkoutTracker(commands.Cog):
 
         return longest
 
-    def save_data(self):
-        data = {
-            "user_goals": self.user_goals,
-            "user_workouts": {str(uid): [dt.isoformat() for dt in wlist] for uid, wlist in self.user_workouts.items()},
-            "pending_reactions": self.pending_reactions
-        }
-        with open(self.STORAGE_FILE, "w") as f:
-            json.dump(data, f)
-
-    def load_data(self):
-        if os.path.exists(self.STORAGE_FILE):
-            with open(self.STORAGE_FILE, "r") as f:
-                data = json.load(f)
-            # Unwrap any list-valued goals so everything is an int
-            self.user_goals = {
-                int(uid): (val[0] if isinstance(val, list) else val)
-                for uid, val in data.get("user_goals", {}).items()
-            }
-            # Load workouts
-            self.user_workouts = defaultdict(list, {
-                int(uid): [datetime.fromisoformat(dt) for dt in dt_list]
-                for uid, dt_list in data.get("user_workouts", {}).items()
-            })
-            self.pending_reactions = data.get("pending_reactions", {})
-        else:
-            print("No storage file found. Initializing empty data.")
-            self.user_goals = {}
-            self.user_workouts = defaultdict(list)
-            self.pending_reactions = {}
-        # Ensure every tracked user has a workouts list
-        for uid in list(self.user_goals.keys()):
-            if uid not in self.user_workouts:
-                self.user_workouts[uid] = []
-
     @app_commands.command(name="set_goal", description="Set your weekly workout goal and opt in to tracking.")
     async def set_goal(self, interaction: discord.Interaction, goal_per_week: int):
         if goal_per_week <= 0:
             await interaction.response.send_message("Your goal must be at least 1 workout per week.", ephemeral=True)
             return
 
-        self.user_goals[interaction.user.id] = goal_per_week
-        self.save_data()
+        async with await DatabaseManager.get_connection() as conn:
+            await conn.execute("INSERT OR REPLACE INTO workout_goals (user_id, goal) VALUES (?, ?);", (interaction.user.id, goal_per_week))
+            await conn.commit()
 
         await interaction.response.send_message(
             f"Your weekly workout goal is set to {goal_per_week} workouts! Let's get moving!", ephemeral=True
@@ -240,42 +240,52 @@ class WorkoutTracker(commands.Cog):
             await channel.send(
                 f"📢 {interaction.user.mention} has joined the workout tracker with a goal of {goal_per_week} workouts per week!"
             )
-        # Initialize workout list if needed
-        if interaction.user.id not in self.user_workouts:
-            self.user_workouts[interaction.user.id] = []
 
     @app_commands.command(name="opt_out", description="Opt out of the workout tracker.")
     async def opt_out(self, interaction: discord.Interaction):
         uid = interaction.user.id
-        if uid in self.user_goals:
-            del self.user_goals[uid]
-            self.pending_reactions.pop(str(uid), None)
-            self.save_data()
+        async with await DatabaseManager.get_connection() as conn:
+            async with conn.execute("SELECT 1 FROM workout_goals WHERE user_id = ?;", (uid,)) as cursor:
+                exists = await cursor.fetchone()
 
-            await interaction.response.send_message(
-                "You have opted out of the workout tracker. But remember, quitting is for the weak! 😠", ephemeral=False
-            )
-            channel = interaction.channel
-            if channel:
-                await channel.send(f"📢 {interaction.user.mention} has quit the workout tracker. I'm not really surprised.")
-        else:
-            await interaction.response.send_message("You're not currently participating in the tracker.", ephemeral=True)
+            if exists:
+                await conn.execute("DELETE FROM workout_goals WHERE user_id = ?;", (uid,))
+                await conn.execute("DELETE FROM workout_history WHERE user_id = ?;", (uid,))
+                await conn.execute("DELETE FROM pending_workout_warnings WHERE user_id = ?;", (uid,))
+                await conn.commit()
+
+                await interaction.response.send_message(
+                    "You have opted out of the workout tracker. But remember, quitting is for the weak! 😠", ephemeral=False
+                )
+                channel = interaction.channel
+                if channel:
+                    await channel.send(f"📢 {interaction.user.mention} has quit the workout tracker. I'm not really surprised.")
+            else:
+                await interaction.response.send_message("You're not currently participating in the tracker.", ephemeral=True)
 
     @app_commands.command(name="leaderboard", description="View the workout leaderboard.")
     async def leaderboard(self, interaction: discord.Interaction):
-        if not self.user_goals:
+        async with await DatabaseManager.get_connection() as conn:
+            async with conn.execute("SELECT user_id, goal FROM workout_goals;") as cursor:
+                users = await cursor.fetchall()
+
+        if not users:
             await interaction.response.send_message("No one has logged any workouts yet! Be the first to start!", ephemeral=True)
             return
 
-        # Compute counts and longest streaks for each tracked user
-        total_workouts = {uid: len(self.user_workouts.get(uid, [])) for uid in self.user_goals}
-        longest_streaks = {uid: self.calculate_longest_streak(uid) for uid in self.user_goals}
+        await interaction.response.defer()
 
-        # Sort leaderboards
+        # Gather metrics for all users
+        total_workouts = {}
+        longest_streaks = {}
+        for uid, goal in users:
+            w = await self.get_workouts(uid)
+            total_workouts[uid] = len(w)
+            longest_streaks[uid] = await self.calculate_longest_streak(uid)
+
         leaderboard_counts = sorted(total_workouts.items(), key=lambda x: x[1], reverse=True)
         leaderboard_streaks = sorted(longest_streaks.items(), key=lambda x: x[1], reverse=True)
 
-        # Build member mapping and display names
         member_map = {}
         display_names = {}
         for uid, _ in leaderboard_counts:
@@ -288,85 +298,90 @@ class WorkoutTracker(commands.Cog):
             member_map[uid] = member
             display_names[uid] = member.display_name if member else f"User {uid}"
 
-        # Limit to top N for graphing (choose top 10)
         TOP_N = 10
         top_counts = [(display_names[uid], count, member_map.get(uid)) for uid, count in leaderboard_counts[:TOP_N]]
         top_streaks = [(display_names[uid], streak, member_map.get(uid)) for uid, streak in leaderboard_streaks[:TOP_N]]
 
-        # Generate image files
+        # Concurrent Avatar Fetching via aiohttp
+        async def fetch_avatar(session, member):
+            if not member:
+                return None
+            try:
+                avatar_url = member.avatar.url if getattr(member, 'avatar', None) else member.display_avatar.url
+                async with session.get(str(avatar_url), timeout=10) as resp:
+                    if resp.status == 200:
+                        return await resp.read()
+            except:
+                pass
+            return None
+
+        # Fetch for counts
+        counts_avatars = []
+        streaks_avatars = []
+        async with aiohttp.ClientSession() as session:
+            tasks_counts = [fetch_avatar(session, t[2]) for t in top_counts]
+            tasks_streaks = [fetch_avatar(session, t[2]) for t in top_streaks]
+            
+            counts_avatars = await asyncio.gather(*tasks_counts)
+            streaks_avatars = await asyncio.gather(*tasks_streaks)
+
+        # Plot charts asynchronously in separate threads
         counts_path = os.path.join(os.getenv("DATA_DIR", "."), "workout_top_counts.png")
         streaks_path = os.path.join(os.getenv("DATA_DIR", "."), "workout_top_streaks.png")
+        
         try:
-            await self.generate_workout_counts_graph(top_counts, counts_path)
-            await self.generate_longest_streaks_graph(top_streaks, streaks_path)
+            await asyncio.to_thread(self._render_leaderboard_counts, top_counts, counts_avatars, counts_path)
+            await asyncio.to_thread(self._render_leaderboard_streaks, top_streaks, streaks_avatars, streaks_path)
 
             files = []
-            try:
+            if os.path.exists(counts_path):
                 files.append(discord.File(counts_path))
-            except Exception:
-                pass
-            try:
+            if os.path.exists(streaks_path):
                 files.append(discord.File(streaks_path))
-            except Exception:
-                pass
 
             if files:
-                await interaction.response.send_message(files=files)
+                await interaction.followup.send(files=files)
             else:
-                await interaction.response.send_message("Could not generate leaderboard images.", ephemeral=True)
+                await interaction.followup.send("Could not generate leaderboard images.")
         finally:
-            # cleanup
-            try:
-                if os.path.exists(counts_path):
-                    os.remove(counts_path)
-                if os.path.exists(streaks_path):
-                    os.remove(streaks_path)
-            except Exception:
-                pass
+            for path in [counts_path, streaks_path]:
+                try:
+                    if os.path.exists(path):
+                        os.remove(path)
+                except:
+                    pass
 
-    async def generate_workout_counts_graph(self, top_counts, out_path: str):
-        """Generate horizontal bar chart for total workouts.
-
-        top_counts: list of (display_name, count, member)
-        """
+    def _render_leaderboard_counts(self, top_counts, avatars_data, out_path):
         names = [t[0] for t in top_counts]
         counts = [t[1] for t in top_counts]
-
         num = len(names)
-        fig_height = max(3, num * 0.6)
+
+        fig_height = max(4, num * 0.6)
         fig, ax = plt.subplots(figsize=(10, fig_height))
         fig.patch.set_facecolor("#2C2F33")
         ax.set_facecolor("#2C2F33")
 
-        # Fetch avatars and compute avg colors
-        avatars = []
         bar_colors = []
-        for name, _, member in top_counts:
+        processed_avatars = []
+        for idx, (name, count, member) in enumerate(top_counts):
+            avatar_bytes = avatars_data[idx]
+            avg_hex = "#10B981" # Sleek emerald
             avatar_img = None
-            avg_hex = "#00BFA5"
-            if member:
+            if avatar_bytes:
                 try:
-                    avatar_url = member.avatar.url if getattr(member, 'avatar', None) else member.display_avatar.url
-                except Exception:
-                    avatar_url = None
-                if avatar_url:
-                    try:
-                        async with self.bot.http._HTTPClient__session.get(str(avatar_url)) as resp:
-                            avatar_data = await resp.read()
-                        avatar = Image.open(BytesIO(avatar_data)).convert("RGBA").resize((36, 36))
-                        avatar_array = np.array(avatar)[..., :3]
-                        avg_color = tuple(avatar_array.mean(axis=(0, 1)).astype(int))
-                        avg_hex = f"#{avg_color[0]:02x}{avg_color[1]:02x}{avg_color[2]:02x}"
-                        mask = Image.new("L", avatar.size, 0)
-                        draw = ImageDraw.Draw(mask)
-                        draw.ellipse((0, 0, avatar.size[0], avatar.size[1]), fill=255)
-                        avatar.putalpha(mask)
-                        avatar_img = avatar
-                    except Exception:
-                        avatar_img = None
-
-            avatars.append(avatar_img)
+                    avatar = Image.open(BytesIO(avatar_bytes)).convert("RGBA").resize((36, 36))
+                    avatar_array = np.array(avatar)[..., :3]
+                    avg_color = tuple(avatar_array.mean(axis=(0, 1)).astype(int))
+                    avg_hex = f"#{avg_color[0]:02x}{avg_color[1]:02x}{avg_color[2]:02x}"
+                    mask = Image.new("L", avatar.size, 0)
+                    draw = ImageDraw.Draw(mask)
+                    draw.ellipse((0, 0, avatar.size[0], avatar.size[1]), fill=255)
+                    avatar.putalpha(mask)
+                    avatar_img = avatar
+                except:
+                    pass
             bar_colors.append(avg_hex)
+            processed_avatars.append(avatar_img)
 
         y = np.arange(num)
         bars = ax.barh(y, counts, color=bar_colors, height=0.6, edgecolor="none")
@@ -374,16 +389,17 @@ class WorkoutTracker(commands.Cog):
         ax.set_yticks(y)
         ax.set_yticklabels(names, color="#FFFFFF", fontsize=12)
         ax.invert_yaxis()
-        ax.set_xlabel("Workouts", color="#FFFFFF")
-        ax.set_title("Top Workout Totals", color="#FFFFFF", fontsize=16)
+        ax.set_xlabel("Workouts", color="#FFFFFF", fontsize=12)
+        ax.set_title("Top Workout Totals", color="#FFFFFF", fontsize=16, pad=15)
         ax.tick_params(axis="x", colors="#FFFFFF")
 
         max_count = max(counts) if counts else 1
         for i, b in enumerate(bars):
             x = b.get_width()
             y_pos = b.get_y() + b.get_height() / 2
-            if avatars[i] is not None:
-                avatar_box = OffsetImage(avatars[i], zoom=1)
+            avatar_img = processed_avatars[i]
+            if avatar_img is not None:
+                avatar_box = OffsetImage(avatar_img, zoom=1)
                 ab = AnnotationBbox(avatar_box, (x + max_count * 0.03, y_pos), frameon=False, xycoords="data", box_alignment=(0.5, 0.5))
                 ax.add_artist(ab)
                 text_x = x + max_count * 0.08
@@ -395,48 +411,37 @@ class WorkoutTracker(commands.Cog):
         fig.savefig(out_path, dpi=150, bbox_inches='tight')
         plt.close(fig)
 
-    async def generate_longest_streaks_graph(self, top_streaks, out_path: str):
-        """Generate horizontal bar chart for longest streaks.
-
-        top_streaks: list of (display_name, streak, member)
-        """
+    def _render_leaderboard_streaks(self, top_streaks, avatars_data, out_path):
         names = [t[0] for t in top_streaks]
         streaks = [t[1] for t in top_streaks]
-
         num = len(names)
-        fig_height = max(3, num * 0.6)
+
+        fig_height = max(4, num * 0.6)
         fig, ax = plt.subplots(figsize=(10, fig_height))
         fig.patch.set_facecolor("#2C2F33")
         ax.set_facecolor("#2C2F33")
 
-        avatars = []
         bar_colors = []
-        for name, _, member in top_streaks:
+        processed_avatars = []
+        for idx, (name, streak, member) in enumerate(top_streaks):
+            avatar_bytes = avatars_data[idx]
+            avg_hex = "#F59E0B" # Sleek orange
             avatar_img = None
-            avg_hex = "#FFB86C"
-            if member:
+            if avatar_bytes:
                 try:
-                    avatar_url = member.avatar.url if getattr(member, 'avatar', None) else member.display_avatar.url
-                except Exception:
-                    avatar_url = None
-                if avatar_url:
-                    try:
-                        async with self.bot.http._HTTPClient__session.get(str(avatar_url)) as resp:
-                            avatar_data = await resp.read()
-                        avatar = Image.open(BytesIO(avatar_data)).convert("RGBA").resize((36, 36))
-                        avatar_array = np.array(avatar)[..., :3]
-                        avg_color = tuple(avatar_array.mean(axis=(0, 1)).astype(int))
-                        avg_hex = f"#{avg_color[0]:02x}{avg_color[1]:02x}{avg_color[2]:02x}"
-                        mask = Image.new("L", avatar.size, 0)
-                        draw = ImageDraw.Draw(mask)
-                        draw.ellipse((0, 0, avatar.size[0], avatar.size[1]), fill=255)
-                        avatar.putalpha(mask)
-                        avatar_img = avatar
-                    except Exception:
-                        avatar_img = None
-
-            avatars.append(avatar_img)
+                    avatar = Image.open(BytesIO(avatar_bytes)).convert("RGBA").resize((36, 36))
+                    avatar_array = np.array(avatar)[..., :3]
+                    avg_color = tuple(avatar_array.mean(axis=(0, 1)).astype(int))
+                    avg_hex = f"#{avg_color[0]:02x}{avg_color[1]:02x}{avg_color[2]:02x}"
+                    mask = Image.new("L", avatar.size, 0)
+                    draw = ImageDraw.Draw(mask)
+                    draw.ellipse((0, 0, avatar.size[0], avatar.size[1]), fill=255)
+                    avatar.putalpha(mask)
+                    avatar_img = avatar
+                except:
+                    pass
             bar_colors.append(avg_hex)
+            processed_avatars.append(avatar_img)
 
         y = np.arange(num)
         bars = ax.barh(y, streaks, color=bar_colors, height=0.6, edgecolor="none")
@@ -444,16 +449,17 @@ class WorkoutTracker(commands.Cog):
         ax.set_yticks(y)
         ax.set_yticklabels(names, color="#FFFFFF", fontsize=12)
         ax.invert_yaxis()
-        ax.set_xlabel("Longest Streak (weeks)", color="#FFFFFF")
-        ax.set_title("Top Longest Workout Streaks", color="#FFFFFF", fontsize=16)
+        ax.set_xlabel("Longest Streak (weeks)", color="#FFFFFF", fontsize=12)
+        ax.set_title("Top Longest Workout Streaks", color="#FFFFFF", fontsize=16, pad=15)
         ax.tick_params(axis="x", colors="#FFFFFF")
 
         max_count = max(streaks) if streaks else 1
         for i, b in enumerate(bars):
             x = b.get_width()
             y_pos = b.get_y() + b.get_height() / 2
-            if avatars[i] is not None:
-                avatar_box = OffsetImage(avatars[i], zoom=1)
+            avatar_img = processed_avatars[i]
+            if avatar_img is not None:
+                avatar_box = OffsetImage(avatar_img, zoom=1)
                 ab = AnnotationBbox(avatar_box, (x + max_count * 0.03, y_pos), frameon=False, xycoords="data", box_alignment=(0.5, 0.5))
                 ax.add_artist(ab)
                 text_x = x + max_count * 0.08
@@ -470,14 +476,17 @@ class WorkoutTracker(commands.Cog):
         uid = interaction.user.id
         now = datetime.now()
         week_start = now.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=now.weekday())
-        all_w = self.user_workouts.get(uid, [])
+        
+        all_w = await self.get_workouts(uid)
         this_week = [w for w in all_w if w >= week_start]
         total = len(all_w)
         weekly = len(this_week)
-        streak = self.calculate_streak(uid)
+        goal = await self.get_goal(uid)
+        
+        streak = await self.calculate_streak(uid)
         streak_msg = f" You're on a **{streak} week streak!**" if streak > 0 else ""
         await interaction.response.send_message(
-            f"You've logged **{weekly} workouts** this week and **{total} total**! (Goal: {self.get_goal(uid)}).{streak_msg}", 
+            f"You've logged **{weekly} workouts** this week and **{total} total**! (Goal: {goal}).{streak_msg}", 
             ephemeral=True
         )
 
@@ -492,28 +501,20 @@ class WorkoutTracker(commands.Cog):
         if message.author.bot:
             return
 
-        # Handle DMs with mean replies
+        # Handle DMs offline using local demeaning wisdom selector
         if message.guild is None:
-            try:
-                response = client.chat.completions.create(
-                    model="gpt-4o-mini",
-                    messages=[
-                        {"role": "developer", "content": "You are a brutally honest and mean friend named Dan."},
-                        {"role": "user", "content": message.content}
-                    ],
-                    temperature=1.0
-                )
-                await message.channel.send(response.choices[0].message.content)
-            except:
-                await message.channel.send("Sorry, I encountered an error processing your request.")
+            response = random.choice(DAN_DM_RESPONSES)
+            await message.channel.send(response)
             return
 
-        # If this is the workout‐thread image check
+        # Thread attachments check
         if not message.attachments or not isinstance(message.channel, discord.Thread) or message.channel.id != self.SPECIFIC_THREAD_ID:
             return
-        if message.author.id not in self.user_goals:
+        
+        goal = await self.get_goal(message.author.id)
+        if goal <= 0:
             return
-        # Ask for confirmation
+            
         confirm = await message.channel.send(f"{message.author.mention}, did you just post a workout image? Reply 'yes' or 'no'.")
         def check(m):
             return m.author == message.author and m.channel == message.channel and m.content.lower() in ("yes","no")
@@ -521,18 +522,25 @@ class WorkoutTracker(commands.Cog):
             reply = await self.bot.wait_for("message", timeout=60, check=check)
             if reply.content.lower() == "yes":
                 now = datetime.now()
-                self.user_workouts[message.author.id].append(now)
-                self.save_data()
-                # Count this week’s total
+                # Log workout in SQLite
+                async with await DatabaseManager.get_connection() as conn:
+                    await conn.execute("INSERT OR IGNORE INTO workout_history (user_id, timestamp) VALUES (?, ?);", (message.author.id, now.isoformat()))
+                    await conn.commit()
+                
                 ws = now.replace(hour=0,minute=0,second=0,microsecond=0) - timedelta(days=now.weekday())
-                count = sum(1 for w in self.user_workouts[message.author.id] if w >= ws)
+                w = await self.get_workouts(message.author.id)
+                count = sum(1 for d in w if d >= ws)
+                
                 await message.channel.send(
-                    f"Workout logged for {message.author.mention}! Total this week: {count} (Goal: {self.get_goal(message.author.id)})."
+                    f"Workout logged for {message.author.mention}! Total this week: {count} (Goal: {goal})."
                 )
             await confirm.delete()
             await reply.delete()
         except asyncio.TimeoutError:
-            await confirm.delete()
+            try:
+                await confirm.delete()
+            except:
+                pass
 
     async def schedule_weekly_reset(self):
         self.weekly_reset_time = get_next_weekly_reset()
@@ -540,112 +548,123 @@ class WorkoutTracker(commands.Cog):
             try:
                 now = datetime.now()
                 delay = (self.weekly_reset_time - now).total_seconds()
-                # send warning
                 if delay > self.warning_threshold:
                     await asyncio.sleep(delay - self.warning_threshold)
                     await self.send_reminders()
                     await asyncio.sleep(self.warning_threshold)
                 else:
                     await asyncio.sleep(delay)
-                # do the reset
+                
                 await self.reset_weekly_goals()
                 self.weekly_reset_time = get_next_weekly_reset()
-                print(f"Next weekly reset scheduled for: {self.weekly_reset_time}")
+                print(f"[WorkoutTracker] Next weekly reset scheduled for: {self.weekly_reset_time}")
             except Exception as e:
-                print(f"Error in schedule_weekly_reset: {e}")
+                print(f"[WorkoutTracker] Error in schedule_weekly_reset: {e}")
                 await asyncio.sleep(60)
 
     async def send_reminders(self):
         start_of_week = datetime.now().replace(hour=0,minute=0,second=0,microsecond=0) - timedelta(days=datetime.now().weekday())
-        for user_id in list(self.user_goals.keys()):
-            goal = self.get_goal(user_id)
-            workouts = self.user_workouts.get(user_id, [])
-            weekly = [w for w in workouts if w >= start_of_week]
-            if len(weekly) < goal:
+        
+        async with await DatabaseManager.get_connection() as conn:
+            async with conn.execute("SELECT user_id, goal FROM workout_goals;") as cursor:
+                users = await cursor.fetchall()
+                
+        for user_id, goal in users:
+            w = await self.get_workouts(user_id)
+            weekly_count = sum(1 for d in w if d >= start_of_week)
+            if weekly_count < goal:
                 try:
                     user = await self.bot.fetch_user(user_id)
                     await user.send(
                         f"⚠️ Reminder: You haven't met your weekly workout goal of {goal} workouts. Log your workouts before the week resets!"
                     )
-                    print(f"Reminder sent to {user_id}.")
+                    print(f"[WorkoutTracker] Reminder sent to {user_id}.")
                 except discord.Forbidden:
-                    print(f"Unable to send reminder to user {user_id}. DMs might be disabled.")
+                    print(f"[WorkoutTracker] Unable to send reminder to user {user_id}. DMs might be disabled.")
 
     async def reset_weekly_goals(self):
-        print("Running reset_weekly_goals...")
+        print("[WorkoutTracker] Running reset_weekly_goals...")
         channel = self.bot.get_channel(self.leaderboard_channel)
         if not channel:
             try:
-                # Try fetching from the API if it's not in cache
                 channel = await self.bot.fetch_channel(self.leaderboard_channel)
             except Exception as e:
-                print(f"Leaderboard channel {self.leaderboard_channel} not found via cache or API: {e}")
+                print(f"[WorkoutTracker] Leaderboard channel {self.leaderboard_channel} not found: {e}")
                 return
 
         start_of_week = datetime.now().replace(hour=0,minute=0,second=0,microsecond=0) - timedelta(days=datetime.now().weekday())
-        met, missed = [], []
-        # Partition users
-        for uid in list(self.user_goals.keys()):
-            goal = self.get_goal(uid)
-            workouts = self.user_workouts.get(uid, [])
-            weekly_count = sum(1 for w in workouts if w >= start_of_week)
+        
+        async with await DatabaseManager.get_connection() as conn:
+            async with conn.execute("SELECT user_id, goal FROM workout_goals;") as cursor:
+                users = await cursor.fetchall()
+
+        met = []
+        missed = []
+        for uid, goal in users:
+            w = await self.get_workouts(uid)
+            weekly_count = sum(1 for d in w if d >= start_of_week)
             if weekly_count >= goal:
                 met.append((uid, goal, weekly_count))
             else:
-                misses = self.calculate_consecutive_misses(uid)
+                misses = await self.calculate_consecutive_misses(uid)
                 missed.append((uid, goal, weekly_count, misses))
 
-        # Announce who hit their goals
+        # Announce who hit goals
         if met:
             msg = "🎉 **Users Who Met Their Goal** 🎉\n"
             for uid, g, c in met:
-                s = self.calculate_streak(uid)
+                s = await self.calculate_streak(uid)
                 msg += f"**<@{uid}>**: Goal **{g}** - Logged **{c}**"
                 if s:
                     msg += f" - Streak: **{s} week{'s' if s>1 else ''}**"
                 msg += " ✅\n"
             await channel.send(msg[:2000])
 
-        # Process old pending reactions
-        for uid_str, pend in list(self.pending_reactions.items()):
-            uid = int(uid_str)
-            try:
-                msg = await channel.fetch_message(pend["message_id"])
-                reacted = any(
-                    str(r.emoji) == "👍" and any(u.id == uid for u in await r.users().flatten())
-                    for r in msg.reactions
-                )
-                if reacted:
-                    await channel.send(f"<@{uid}> acknowledged and remains in the tracker.")
-                else:
-                    ts = datetime.fromisoformat(pend["timestamp"])
-                    if datetime.now() - ts > timedelta(weeks=1):
-                        await channel.send(f"<@{uid}> did not acknowledge and has been removed.")
-                        self.user_goals.pop(uid, None)
-                del self.pending_reactions[uid_str]
-            except Exception as e:
-                print(f"Error checking pending reaction for user {uid}: {e}")
-                del self.pending_reactions[uid_str]
+        # Process old warnings that were NOT acknowledged within 1 week
+        async with await DatabaseManager.get_connection() as conn:
+            async with conn.execute("SELECT user_id, message_id, timestamp FROM pending_workout_warnings;") as cursor:
+                pending_warnings = await cursor.fetchall()
+            
+            for p_uid, p_msg_id, p_ts_str in pending_warnings:
+                p_ts = datetime.fromisoformat(p_ts_str)
+                if datetime.now() - p_ts > timedelta(weeks=1):
+                    # Kick user out of tracker
+                    await conn.execute("DELETE FROM workout_goals WHERE user_id = ?;", (p_uid,))
+                    await conn.execute("DELETE FROM workout_history WHERE user_id = ?;", (p_uid,))
+                    await conn.execute("DELETE FROM pending_workout_warnings WHERE user_id = ?;", (p_uid,))
+                    await conn.commit()
+                    
+                    try:
+                        # Attempt to edit button message to say they were removed
+                        msg = await channel.fetch_message(p_msg_id)
+                        await msg.edit(content=f"❌ **<@{p_uid}> did not acknowledge their warning in time and was removed from the tracker.** Quitting is for the weak! 😠", view=None)
+                    except:
+                        await channel.send(f"❌ <@{p_uid}> did not acknowledge their warning in time and was removed from the tracker.")
 
-        # Announce failures
+        # Announce failures & Create new warnings with Interactive Buttons
         for uid, g, c, misses in missed:
-            dm = generate_demeaning_message(misses)
+            dm = get_demeaning_message()
             if misses < self.miss_threshold:
                 text = f"**<@{uid}>**: Goal **{g}** - Logged **{c}** ❌\n> {dm}"
                 await channel.send(text[:2000])
             else:
                 text = (
-                    f"**<@{uid}>**: Goal **{g}** - Logged **{c}** ❌\n"
-                    f"You missed **{misses} consecutive week{'s' if misses>1 else ''}**\n> {dm}"
+                    f"⚠️ **<@{uid}>**: Goal **{g}** - Logged **{c}** ❌\n"
+                    f"You missed **{misses} consecutive weeks**! Acknowledge this warning below within 1 week to stay in the tracker!\n> {dm}"
                 )
-                sent = await channel.send(text[:2000])
-                self.pending_reactions[str(uid)] = {
-                    "message_id": sent.id,
-                    "timestamp": datetime.now().isoformat()
-                }
+                # Attach Acknowledge Button View
+                view = AcknowledgeWorkoutButton()
+                sent = await channel.send(text[:2000], view=view)
+                
+                # Save pending warning in SQLite
+                async with await DatabaseManager.get_connection() as conn:
+                    await conn.execute(
+                        "INSERT OR REPLACE INTO pending_workout_warnings (user_id, message_id, timestamp) VALUES (?, ?, ?);",
+                        (uid, sent.id, datetime.now().isoformat())
+                    )
+                    await conn.commit()
 
-        self.save_data()
-        print("Weekly goals reset and data saved!")
+        print("[WorkoutTracker] Weekly goals reset successfully.")
 
 async def setup(bot):
     await bot.add_cog(WorkoutTracker(bot))

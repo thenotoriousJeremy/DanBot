@@ -247,49 +247,56 @@ class WordleStats(commands.Cog):
                 except Exception:
                     pass
 
-    async def generate_completions_graph(self, guild: discord.Guild, top_completions, player_member_map: dict):
-        """Generate a horizontal bar chart for top completions and return the file path."""
-        # top_completions: list of (name, stats)
-        names = [n for n, _ in top_completions]
-        counts = [s["completions"] for _, s in top_completions]
+    async def _fetch_avatars_concurrently(self, members):
+        """Download avatars concurrently using aiohttp."""
+        import aiohttp
+        async def fetch_avatar(session, member):
+            if not member:
+                return None
+            try:
+                avatar_url = member.avatar.url if getattr(member, 'avatar', None) else member.display_avatar.url
+                async with session.get(str(avatar_url), timeout=5) as resp:
+                    if resp.status == 200:
+                        return await resp.read()
+            except Exception:
+                pass
+            return None
 
+        async with aiohttp.ClientSession() as session:
+            tasks = [fetch_avatar(session, m) for m in members]
+            return await asyncio.gather(*tasks)
+
+    def _render_wordle_graph_sync(self, names, counts, avatars_data, out_path, title, x_label):
+        """Synchronous Matplotlib rendering function run on background thread."""
         num = len(names)
         fig_height = max(3, num * 0.6)
         fig, ax = plt.subplots(figsize=(10, fig_height))
         fig.patch.set_facecolor("#2C2F33")
         ax.set_facecolor("#2C2F33")
 
-        # Fetch avatars and compute average colors for bars
-        avatars = []
+        processed_avatars = []
         bar_colors = []
-        for name in names:
-            member = player_member_map.get(name)
-            avatar_img = None
-            avg_hex = "#00BFA5"  # default completion color
-            if member:
-                try:
-                    avatar_url = member.avatar.url if getattr(member, 'avatar', None) else member.display_avatar.url
-                except Exception:
-                    avatar_url = None
-                if avatar_url:
-                    try:
-                        async with self.bot.http._HTTPClient__session.get(str(avatar_url)) as resp:
-                            avatar_data = await resp.read()
-                        avatar = Image.open(BytesIO(avatar_data)).convert("RGBA").resize((36, 36))
-                        # compute average color from RGB channels
-                        avatar_array = np.array(avatar)[..., :3]
-                        avg_color = tuple(avatar_array.mean(axis=(0, 1)).astype(int))
-                        avg_hex = f"#{avg_color[0]:02x}{avg_color[1]:02x}{avg_color[2]:02x}"
-                        # circular mask
-                        mask = Image.new("L", avatar.size, 0)
-                        draw = ImageDraw.Draw(mask)
-                        draw.ellipse((0, 0, avatar.size[0], avatar.size[1]), fill=255)
-                        avatar.putalpha(mask)
-                        avatar_img = avatar
-                    except Exception:
-                        avatar_img = None
 
-            avatars.append(avatar_img)
+        for i, name in enumerate(names):
+            avatar_bytes = avatars_data[i]
+            avg_hex = "#00BFA5" if "Completions" in title else "#FFB74D"
+            avatar_img = None
+            if avatar_bytes:
+                try:
+                    avatar = Image.open(BytesIO(avatar_bytes)).convert("RGBA").resize((36, 36))
+                    avatar_array = np.array(avatar)[..., :3]
+                    avg_color = tuple(avatar_array.mean(axis=(0, 1)).astype(int))
+                    avg_hex = f"#{avg_color[0]:02x}{avg_color[1]:02x}{avg_color[2]:02x}"
+                    
+                    mask = Image.new("L", avatar.size, 0)
+                    draw = ImageDraw.Draw(mask)
+                    draw.ellipse((0, 0, avatar.size[0], avatar.size[1]), fill=255)
+                    avatar.putalpha(mask)
+                    
+                    avatar_img = avatar
+                except Exception:
+                    pass
+            processed_avatars.append(avatar_img)
             bar_colors.append(avg_hex)
 
         y = np.arange(num)
@@ -298,17 +305,16 @@ class WordleStats(commands.Cog):
         ax.set_yticks(y)
         ax.set_yticklabels(names, color="#FFFFFF", fontsize=12)
         ax.invert_yaxis()
-        ax.set_xlabel("Completions", color="#FFFFFF")
-        ax.set_title("Top Wordle Completions", color="#FFFFFF", fontsize=16)
+        ax.set_xlabel(x_label, color="#FFFFFF")
+        ax.set_title(title, color="#FFFFFF", fontsize=16, pad=15)
         ax.tick_params(axis="x", colors="#FFFFFF")
 
-        # Add counts at end of bars and place avatars
         max_count = max(counts) if counts else 1
         for i, b in enumerate(bars):
             x = b.get_width()
             y_pos = b.get_y() + b.get_height() / 2
-            if avatars[i] is not None:
-                avatar_img = avatars[i]
+            avatar_img = processed_avatars[i]
+            if avatar_img is not None:
                 avatar_box = OffsetImage(avatar_img, zoom=1)
                 ab = AnnotationBbox(avatar_box, (x + max_count * 0.03, y_pos), frameon=False, xycoords="data", box_alignment=(0.5, 0.5))
                 ax.add_artist(ab)
@@ -319,83 +325,47 @@ class WordleStats(commands.Cog):
             ax.text(text_x, y_pos, str(counts[i]), va="center", color="#FFFFFF", fontsize=12)
 
         plt.tight_layout()
-        out_path = os.path.join(os.getenv("DATA_DIR", "."), "wordle_top_completions.png")
         plt.savefig(out_path, bbox_inches="tight", facecolor=fig.get_facecolor())
-        plt.close()
+        plt.close(fig)
+
+    async def generate_completions_graph(self, guild: discord.Guild, top_completions, player_member_map: dict):
+        """Generate a horizontal bar chart for top completions and return the file path."""
+        names = [n for n, _ in top_completions]
+        counts = [s["completions"] for _, s in top_completions]
+        members = [player_member_map.get(name) for name in names]
+
+        avatars_data = await self._fetch_avatars_concurrently(members)
+
+        out_path = os.path.join(os.getenv("DATA_DIR", "."), "wordle_top_completions.png")
+        await asyncio.to_thread(
+            self._render_wordle_graph_sync,
+            names,
+            counts,
+            avatars_data,
+            out_path,
+            "Top Wordle Completions",
+            "Completions"
+        )
         return out_path
 
     async def generate_streaks_graph(self, guild: discord.Guild, top_streaks, player_member_map: dict):
         """Generate a horizontal bar chart for longest completion streaks and return the file path."""
         names = [n for n, _ in top_streaks]
         counts = [s["longest_streak"] for _, s in top_streaks]
+        members = [player_member_map.get(name) for name in names]
 
-        num = len(names)
-        fig_height = max(3, num * 0.6)
-        fig, ax = plt.subplots(figsize=(10, fig_height))
-        fig.patch.set_facecolor("#2C2F33")
-        ax.set_facecolor("#2C2F33")
+        avatars_data = await self._fetch_avatars_concurrently(members)
 
-        # Fetch avatars and compute average colors for bar coloring
-        avatars = []
-        bar_colors = []
-        for name in names:
-            member = player_member_map.get(name)
-            avatar_img = None
-            avg_hex = "#FFB74D"  # default streak color
-            if member:
-                try:
-                    avatar_url = member.avatar.url if getattr(member, 'avatar', None) else member.display_avatar.url
-                except Exception:
-                    avatar_url = None
-                if avatar_url:
-                    try:
-                        async with self.bot.http._HTTPClient__session.get(str(avatar_url)) as resp:
-                            avatar_data = await resp.read()
-                        avatar = Image.open(BytesIO(avatar_data)).convert("RGBA").resize((36, 36))
-                        avatar_array = np.array(avatar)[..., :3]
-                        avg_color = tuple(avatar_array.mean(axis=(0, 1)).astype(int))
-                        avg_hex = f"#{avg_color[0]:02x}{avg_color[1]:02x}{avg_color[2]:02x}"
-                        mask = Image.new("L", avatar.size, 0)
-                        draw = ImageDraw.Draw(mask)
-                        draw.ellipse((0, 0, avatar.size[0], avatar.size[1]), fill=255)
-                        avatar.putalpha(mask)
-                        avatar_img = avatar
-                    except Exception:
-                        avatar_img = None
-
-            avatars.append(avatar_img)
-            bar_colors.append(avg_hex)
-
-        y = np.arange(num)
-        bars = ax.barh(y, counts, color=bar_colors, height=0.6, edgecolor="none")
-
-        ax.set_yticks(y)
-        ax.set_yticklabels(names, color="#FFFFFF", fontsize=12)
-        ax.invert_yaxis()
-        ax.set_xlabel("Days", color="#FFFFFF")
-        ax.set_title("Longest Recorded Completion Streaks", color="#FFFFFF", fontsize=16)
-        ax.tick_params(axis="x", colors="#FFFFFF")
-
-        max_count = max(counts) if counts else 1
-
-        for i, b in enumerate(bars):
-            x = b.get_width()
-            y_pos = b.get_y() + b.get_height() / 2
-            if avatars[i] is not None:
-                avatar_img = avatars[i]
-                avatar_box = OffsetImage(avatar_img, zoom=1)
-                ab = AnnotationBbox(avatar_box, (x + max_count * 0.03, y_pos), frameon=False, xycoords="data", box_alignment=(0.5, 0.5))
-                ax.add_artist(ab)
-                text_x = x + max_count * 0.08
-            else:
-                text_x = x + max_count * 0.02
-
-            ax.text(text_x, y_pos, str(counts[i]), va="center", color="#FFFFFF", fontsize=12)
-
-        plt.tight_layout()
         out_path = os.path.join(os.getenv("DATA_DIR", "."), "wordle_top_streaks.png")
-        plt.savefig(out_path, bbox_inches="tight", facecolor=fig.get_facecolor())
-        plt.close()
+        await asyncio.to_thread(
+            self._render_wordle_graph_sync,
+            names,
+            counts,
+            avatars_data,
+            out_path,
+            "Longest Recorded Completion Streaks",
+            "Days"
+        )
         return out_path
 
 
