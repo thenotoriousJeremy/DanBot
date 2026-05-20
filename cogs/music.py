@@ -304,29 +304,29 @@ class MusicPlayerView(discord.ui.View):
         play_btn = [b for b in self.children if b.custom_id == "play_pause"][0]
         if self.player.vc and self.player.vc.is_paused():
             play_btn.label = "▶️ Resume"
-            play_btn.style = discord.ui.ButtonStyle.green
+            play_btn.style = discord.ButtonStyle.green
         else:
             play_btn.label = "⏸️ Pause"
-            play_btn.style = discord.ui.ButtonStyle.grey
+            play_btn.style = discord.ButtonStyle.grey
 
         # 2. Loop Button
         loop_btn = [b for b in self.children if b.custom_id == "loop"][0]
         if self.player.loop:
             loop_btn.label = "🔁 Single"
-            loop_btn.style = discord.ui.ButtonStyle.green
+            loop_btn.style = discord.ButtonStyle.green
         elif self.player.loop_queue:
             loop_btn.label = "🔁 Queue"
-            loop_btn.style = discord.ui.ButtonStyle.blurple
+            loop_btn.style = discord.ButtonStyle.blurple
         else:
             loop_btn.label = "🔁 Loop Off"
-            loop_btn.style = discord.ui.ButtonStyle.grey
+            loop_btn.style = discord.ButtonStyle.grey
 
         # 3. Shuffle Button
         shuffle_btn = [b for b in self.children if b.custom_id == "shuffle"][0]
         if self.player.shuffle:
-            shuffle_btn.style = discord.ui.ButtonStyle.green
+            shuffle_btn.style = discord.ButtonStyle.green
         else:
-            shuffle_btn.style = discord.ui.ButtonStyle.grey
+            shuffle_btn.style = discord.ButtonStyle.grey
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         """Validate if interactive user is in identical VC as bot."""
@@ -338,7 +338,7 @@ class MusicPlayerView(discord.ui.View):
             return False
         return True
 
-    @discord.ui.button(label="⏸️ Pause", style=discord.ui.ButtonStyle.grey, custom_id="play_pause")
+    @discord.ui.button(label="⏸️ Pause", style=discord.ButtonStyle.grey, custom_id="play_pause")
     async def play_pause(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not self.player.vc:
             await interaction.response.send_message("Not currently playing.", ephemeral=True)
@@ -353,7 +353,7 @@ class MusicPlayerView(discord.ui.View):
         self.update_button_styles()
         await interaction.message.edit(embed=self.player.create_player_embed(), view=self)
 
-    @discord.ui.button(label="⏭️ Skip", style=discord.ui.ButtonStyle.grey, custom_id="skip")
+    @discord.ui.button(label="⏭️ Skip", style=discord.ButtonStyle.grey, custom_id="skip")
     async def skip(self, interaction: discord.Interaction, button: discord.ui.Button):
         if self.player.vc:
             self.player.vc.stop()
@@ -361,12 +361,12 @@ class MusicPlayerView(discord.ui.View):
         else:
             await interaction.response.send_message("Nothing is playing.", ephemeral=True)
 
-    @discord.ui.button(label="⏹️ Stop", style=discord.ui.ButtonStyle.red, custom_id="stop")
+    @discord.ui.button(label="⏹️ Stop", style=discord.ButtonStyle.red, custom_id="stop")
     async def stop(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.player.stop()
         await interaction.response.send_message("Playback stopped and channel disconnected.", ephemeral=True)
 
-    @discord.ui.button(label="🔁 Loop Off", style=discord.ui.ButtonStyle.grey, custom_id="loop")
+    @discord.ui.button(label="🔁 Loop Off", style=discord.ButtonStyle.grey, custom_id="loop")
     async def loop(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not self.player.loop and not self.player.loop_queue:
             self.player.loop = True
@@ -381,7 +381,7 @@ class MusicPlayerView(discord.ui.View):
         self.update_button_styles()
         await interaction.message.edit(embed=self.player.create_player_embed(), view=self)
 
-    @discord.ui.button(label="🔀 Shuffle", style=discord.ui.ButtonStyle.grey, custom_id="shuffle")
+    @discord.ui.button(label="🔀 Shuffle", style=discord.ButtonStyle.grey, custom_id="shuffle")
     async def shuffle(self, interaction: discord.Interaction, button: discord.ui.Button):
         self.player.shuffle = not self.player.shuffle
         state = "enabled" if self.player.shuffle else "disabled"
@@ -389,7 +389,7 @@ class MusicPlayerView(discord.ui.View):
         self.update_button_styles()
         await interaction.message.edit(embed=self.player.create_player_embed(), view=self)
 
-    @discord.ui.button(label="📜 Queue", style=discord.ui.ButtonStyle.grey, custom_id="queue_list")
+    @discord.ui.button(label="📜 Queue", style=discord.ButtonStyle.grey, custom_id="queue_list")
     async def view_queue(self, interaction: discord.Interaction, button: discord.ui.Button):
         queue_list = self.player.queue
         if not queue_list:

@@ -71,7 +71,7 @@ class AcknowledgeWorkoutButton(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None) # Completely persistent across bot restarts
 
-    @discord.ui.button(label="Acknowledge & Stay in Tracker", style=discord.ui.ButtonStyle.green, custom_id="ack_workout_btn")
+    @discord.ui.button(label="Acknowledge & Stay in Tracker", style=discord.ButtonStyle.green, custom_id="ack_workout_btn")
     async def acknowledge(self, interaction: discord.Interaction, button: discord.ui.Button):
         # Determine who this warning is actually for from the SQLite database
         async with await DatabaseManager.get_connection() as conn:
