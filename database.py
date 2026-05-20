@@ -6,14 +6,27 @@ from pathlib import Path
 BASE_DIR = Path(__file__).resolve().parent
 DB_PATH = os.path.join(os.getenv("DATA_DIR", "."), "birthdays.db")
 
+class AsyncConnectionContext:
+    def __init__(self, db_path):
+        self.db_path = db_path
+        self.conn = None
+
+    async def __aenter__(self) -> aiosqlite.Connection:
+        self.conn = aiosqlite.connect(self.db_path)
+        await self.conn
+        # Enable foreign key support
+        await self.conn.execute("PRAGMA foreign_keys = ON;")
+        return self.conn
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        if self.conn:
+            await self.conn.close()
+
 class DatabaseManager:
     @staticmethod
-    async def get_connection() -> aiosqlite.Connection:
+    async def get_connection() -> AsyncConnectionContext:
         """Establish and return an asynchronous SQLite database connection."""
-        conn = await aiosqlite.connect(DB_PATH)
-        # Enable foreign key support
-        await conn.execute("PRAGMA foreign_keys = ON;")
-        return conn
+        return AsyncConnectionContext(DB_PATH)
 
     @classmethod
     async def initialize(cls):
